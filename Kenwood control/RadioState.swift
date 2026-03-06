@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import CoreAudio
+import UserNotifications
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -143,7 +144,16 @@ final class RadioState: ObservableObject {
     @Published var memoryChannels: [MemoryChannel] = []
     @Published var isLoadingAllMemories: Bool = false
 
-    private let connection = TS890Connection()
+    // MARK: - Connection type (LAN / USB)
+    @Published var connectionType: ConnectionType = .lan
+    @Published var availableSerialPorts: [SerialPort] = []
+    @Published var selectedSerialPort: String = ""
+
+    // MARK: - Digital mode configuration state
+    @Published var isConfiguredForDigitalMode: Bool = false
+
+    private var connection: any CATTransport = TS890Connection()
+    private var previousOperatingModeForDigital: KenwoodCAT.OperatingMode? = nil
     private let morsePlayer = MorseAudioPlayer()
     /// Proxy wrapping the active backend. Passed to LanAudioPipeline and AudioMonitor
     /// so backend switches (and enable/disable) immediately affect all running pipelines.
@@ -174,6 +184,7 @@ final class RadioState: ObservableObject {
     private var generatedTxBuffer: [Int16] = []
     private var generatedTxBufferPos: Int = 0
     private var currentHost: String = ""
+    private var currentSerialPort: String = ""
     private var cancellables: Set<AnyCancellable> = []
     private let lanRxTapQueue = DispatchQueue(label: "KenwoodLanAudio.tap")
 
@@ -265,82 +276,7 @@ final class RadioState: ObservableObject {
         }
 
         // Wire connection callbacks to update published state on main thread
-        connection.onStatusChange = { [weak self] status in
-            AppLogger.info("Status: \(status.rawValue)")
-            AppFileLogger.shared.log("Status: \(status.rawValue)")
-            DispatchQueue.main.async {
-                let mapped: ConnectionStatus
-                switch status {
-                case .connected: mapped = .connected
-                case .connecting: mapped = .connecting
-                case .authenticating: mapped = .authenticating
-                case .disconnected: mapped = .disconnected
-                }
-                self?.connectionStatus = mapped.rawValue.capitalized
-                self?.announceConnectionStatus(mapped)
-
-                guard let self else { return }
-                if mapped == .connected, self.autoStartLanAudio, !self.currentHost.isEmpty {
-                    if self.isLanAudioRunning {
-                        // Receiver is already bound — just tell the radio to resume streaming.
-                        AppFileLogger.shared.log("LAN: reconnect — reusing existing receiver, sending ##VP1")
-                        self.connection.send("##VP1;")
-                    } else {
-                        self.startLanAudio(host: self.currentHost)
-                    }
-                    // Prime basic audio/rf controls so sliders reflect real state.
-                    self.send(KenwoodCAT.getAFGain())
-                    self.send(KenwoodCAT.getRFGain())
-                    self.send(KenwoodCAT.getVoipInputLevel())
-                    self.send(KenwoodCAT.getVoipOutputLevel())
-                    // Prime common operating controls (top-5 features).
-                    self.queryTop5()
-                    // Morse audio greeting: play "CQ" locally through the Mac's speakers.
-                    if self.cwGreetingEnabled {
-                        AppFileLogger.shared.log("Morse: playing connect greeting (CQ)")
-                        self.morsePlayer.play("CQ")
-                    }
-                }
-                if mapped == .disconnected {
-                    self.stopMicCapture()
-                    // Keep the UDP receiver alive so port 60001 stays bound.
-                    // On reconnect we just re-send ##VP1 rather than rebinding.
-                    self.isPTTDown = false
-                }
-            }
-        }
-        connection.onError = { [weak self] err in
-            AppLogger.error(err)
-            AppFileLogger.shared.log("Error: \(err)")
-            DispatchQueue.main.async {
-                self?.lastError = err
-                self?.errorLog.append(err)
-                self?.connectionLog.append("Error: \(err)")
-                self?.announceError(err)
-            }
-        }
-        connection.onFrame = { [weak self] frame in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.handleFrame(frame)
-                if self.shouldPublishLastRXFrame(frame) {
-                    self.lastRXFrame = frame
-                }
-            }
-        }
-        connection.onLog = { [weak self] message in
-            // Auto Information (AI) produces a lot of RX: SM.... frames; keep them out of logs for performance/VoiceOver.
-            if message.hasPrefix("RX: SM") { return }
-            AppLogger.info(message)
-            AppFileLogger.shared.log(message)
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.connectionLog.append(message)
-                if self.connectionLog.count > 50 {
-                    self.connectionLog.removeFirst(self.connectionLog.count - 50)
-                }
-            }
-        }
+        wireCallbacks()
 
         // Switching output devices must take effect immediately, not only on the next start.
         $selectedLanAudioOutputUID
@@ -381,6 +317,113 @@ final class RadioState: ObservableObject {
             .store(in: &cancellables)
     }
 
+    // MARK: - Transport wiring
+
+    private func wireCallbacks() {
+        connection.onStatusChange = { [weak self] status in
+            AppLogger.info("Status: \(status.rawValue)")
+            AppFileLogger.shared.log("Status: \(status.rawValue)")
+            DispatchQueue.main.async {
+                let mapped: ConnectionStatus
+                switch status {
+                case .connected: mapped = .connected
+                case .connecting: mapped = .connecting
+                case .authenticating: mapped = .authenticating
+                case .disconnected: mapped = .disconnected
+                }
+                self?.connectionStatus = mapped.rawValue.capitalized
+                self?.announceConnectionStatus(mapped)
+
+                guard let self else { return }
+                if mapped == .connected {
+                    if self.connectionType == .lan {
+                        // If the user configured the radio for USB digital mode and is now
+                        // connecting via LAN, automatically restore the previous operating mode
+                        // and switch TX audio to LAN VoIP so voice/digital ops work immediately.
+                        if self.isConfiguredForDigitalMode {
+                            let revertMode = self.previousOperatingModeForDigital ?? .usb
+                            self.send(KenwoodCAT.setOperatingMode(revertMode))
+                            self.send("MS003;") // SEND/PTT, Front=OFF, Rear=LAN
+                            self.isConfiguredForDigitalMode = false
+                            self.previousOperatingModeForDigital = nil
+                            AppFileLogger.shared.log("CAT: LAN connect — cleared digital mode config, restored \(revertMode.label), TX audio=LAN")
+                            self.postRadioNotification(
+                                title: "Radio Updated for LAN Connection",
+                                body: "Digital mode cleared. Restored to \(revertMode.label) with LAN VoIP audio for TX."
+                            )
+                        }
+
+                        if self.autoStartLanAudio, !self.currentHost.isEmpty {
+                            if self.isLanAudioRunning {
+                                AppFileLogger.shared.log("LAN: reconnect — reusing existing receiver, sending ##VP1")
+                                self.connection.send("##VP1;")
+                            } else {
+                                self.startLanAudio(host: self.currentHost)
+                            }
+                            self.send(KenwoodCAT.getVoipInputLevel())
+                            self.send(KenwoodCAT.getVoipOutputLevel())
+                        }
+                    }
+                    // Prime basic audio/rf controls and common operating params.
+                    self.send(KenwoodCAT.getAFGain())
+                    self.send(KenwoodCAT.getRFGain())
+                    self.queryTop5()
+                    if self.cwGreetingEnabled {
+                        AppFileLogger.shared.log("Morse: playing connect greeting (CQ)")
+                        self.morsePlayer.play("CQ")
+                    }
+                }
+                if mapped == .disconnected {
+                    if self.connectionType == .lan { self.stopMicCapture() }
+                    // Keep the UDP receiver alive so port 60001 stays bound.
+                    self.isPTTDown = false
+                }
+            }
+        }
+        connection.onError = { [weak self] err in
+            AppLogger.error(err)
+            AppFileLogger.shared.log("Error: \(err)")
+            DispatchQueue.main.async {
+                self?.lastError = err
+                self?.errorLog.append(err)
+                self?.connectionLog.append("Error: \(err)")
+                self?.announceError(err)
+            }
+        }
+        connection.onFrame = { [weak self] frame in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.handleFrame(frame)
+                if self.shouldPublishLastRXFrame(frame) {
+                    self.lastRXFrame = frame
+                }
+            }
+        }
+        connection.onLog = { [weak self] message in
+            if message.hasPrefix("RX: SM") { return }
+            AppLogger.info(message)
+            AppFileLogger.shared.log(message)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.connectionLog.append(message)
+                if self.connectionLog.count > 50 {
+                    self.connectionLog.removeFirst(self.connectionLog.count - 50)
+                }
+            }
+        }
+    }
+
+    // MARK: - Serial port discovery
+
+    func scanSerialPorts() {
+        availableSerialPorts = SerialPortScanner.availablePorts()
+        if selectedSerialPort.isEmpty || !availableSerialPorts.contains(where: { $0.path == selectedSerialPort }) {
+            selectedSerialPort = availableSerialPorts.first(where: { $0.isLikelyRadio })?.path
+                              ?? availableSerialPorts.first?.path
+                              ?? ""
+        }
+    }
+
     func setAudioMuted(_ muted: Bool) {
         isAudioMuted = muted
         applyAudioMuteState()
@@ -405,9 +448,24 @@ final class RadioState: ObservableObject {
         let p = UInt16(clamping: port)
         let type = KenwoodKNS.AccountType(rawValue: knsAccountType) ?? .administrator
         persistKnsSettings(host: host, port: port, accountType: type)
+        connectionType = .lan
         currentHost = host
         lastError = nil
-        connection.connect(host: host, port: p, useKnsLogin: useKnsLogin, accountType: type, adminId: adminId, adminPassword: adminPassword)
+        let lan = TS890Connection()
+        connection = lan
+        wireCallbacks()
+        lan.connect(host: host, port: p, useKnsLogin: useKnsLogin, accountType: type, adminId: adminId, adminPassword: adminPassword)
+        connectionStatus = ConnectionStatus.connecting.rawValue
+    }
+
+    func connectUSB(portPath: String) {
+        connectionType = .usb
+        currentSerialPort = portPath
+        lastError = nil
+        let serial = SerialCATConnection()
+        connection = serial
+        wireCallbacks()
+        serial.connect(portPath: portPath)
         connectionStatus = ConnectionStatus.connecting.rawValue
     }
 
@@ -416,14 +474,18 @@ final class RadioState: ObservableObject {
             AppFileLogger.shared.log("Morse: playing disconnect farewell (73)")
             morsePlayer.play("73")
         }
-        stopLanAudio()
+        if connectionType == .lan { stopLanAudio() }
         connection.disconnect()
     }
 
-    /// Reconnect using the last saved host and port (for keyboard shortcut use).
-    /// No-ops if already connected to avoid interrupting an active audio session.
+    /// Reconnect using the last transport and settings (keyboard shortcut use).
+    /// No-ops if already connected.
     func reconnect() {
         guard connectionStatus != ConnectionStatus.connected.rawValue else { return }
+        if connectionType == .usb, !currentSerialPort.isEmpty {
+            connectUSB(portPath: currentSerialPort)
+            return
+        }
         guard let host = KNSSettings.loadLastHost(), !host.isEmpty else { return }
         let port = KNSSettings.loadLastPort() ?? 60000
         loadSavedCredentials(host: host)
@@ -804,6 +866,52 @@ final class RadioState: ObservableObject {
         isAudioMonitorRunning = false
     }
 
+    /// Configures the radio for WSJT-X / digital mode.
+    /// Saves the current operating mode, then sends OM0D (USB-DATA) + MS002 (Rear=USB Audio).
+    func configureForDigitalMode() {
+        previousOperatingModeForDigital = operatingMode
+        send("OM0D;")   // USB-DATA mode (P2=D)
+        send("MS002;")  // SEND/PTT (P1=0), Front=OFF (P2=0), Rear=USB Audio (P3=2)
+        isConfiguredForDigitalMode = true
+        AppFileLogger.shared.log("CAT: configured for digital mode — USB-DATA, USB audio source, previous mode=\(operatingMode?.label ?? "unknown")")
+        postRadioNotification(
+            title: "Radio Configured for WSJT-X",
+            body: "TS-890S is now in USB-DATA mode with USB audio TX. Press Revert in the app when finished."
+        )
+    }
+
+    /// Restores the radio to the mode it was in before configureForDigitalMode() was called.
+    /// Sends the previous OM mode + MS001 (SEND/PTT, Front=Microphone, Rear=OFF).
+    func revertFromDigitalMode() {
+        let revertMode = previousOperatingModeForDigital ?? .usb
+        send(KenwoodCAT.setOperatingMode(revertMode))
+        send("MS001;")  // SEND/PTT (P1=0), Front=Microphone (P2=1), Rear=OFF (P3=0)
+        isConfiguredForDigitalMode = false
+        previousOperatingModeForDigital = nil
+        AppFileLogger.shared.log("CAT: reverted from digital mode to \(revertMode.label)")
+        postRadioNotification(
+            title: "Radio Reverted to Voice Mode",
+            body: "TS-890S restored to \(revertMode.label) with microphone input."
+        )
+    }
+
+    private func postRadioNotification(title: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+            let request = UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: content,
+                trigger: nil   // deliver immediately
+            )
+            center.add(request)
+        }
+    }
+
     func setAudioMonitorWetDry(_ value: Double) {
         audioMonitorWetDry = value
         audioMonitor?.wetDry = Float(value)
@@ -1048,7 +1156,7 @@ final class RadioState: ObservableObject {
         }
     }
 
-    private func handleFrame(_ frame: String) {
+    func handleFrame(_ frame: String) {
         let cleaned = frame.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
         let core = cleaned.hasSuffix(";") ? String(cleaned.dropLast()) : cleaned
 
@@ -1358,9 +1466,9 @@ final class RadioState: ObservableObject {
             return
         }
 
-        if core.hasPrefix("RA"), core.count >= 5 {
-            // RA + P1P1(always "00") + P2 (attenuator level)
-            let levelChar = core.dropFirst(4).prefix(1)
+        if core.hasPrefix("RA"), core.count >= 3 {
+            // RA + P1 (attenuator level: 0=off, 1=6dB, 2=12dB, 3=18dB)
+            let levelChar = core.dropFirst(2).prefix(1)
             if let raw = Int(levelChar), let level = KenwoodCAT.AttenuatorLevel(rawValue: raw) {
                 attenuatorLevel = level
             }

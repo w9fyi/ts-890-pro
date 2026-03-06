@@ -6,8 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		AABBCC062F3D39560045FEBD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7FCA46A82F3D39560045FEBD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FCA46AF2F3D39560045FEBD;
+			remoteInfo = "Kenwood control";
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		7FCA46B02F3D39560045FEBD /* Kenwood control.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Kenwood control.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AABBCC012F3D39560045FEBD /* Kenwood controlTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Kenwood controlTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -48,10 +59,22 @@
 			path = ThirdParty;
 			sourceTree = "<group>";
 		};
+		AABBCC022F3D39560045FEBD /* Kenwood controlTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Kenwood controlTests";
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		7FCA46AD2F3D39560045FEBD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AABBCC032F3D39560045FEBD /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -66,6 +89,7 @@
 			children = (
 				7FCA46B22F3D39560045FEBD /* Kenwood control */,
 				944F4A1F3F28484AA2A8202A /* ThirdParty */,
+				AABBCC022F3D39560045FEBD /* Kenwood controlTests */,
 				7FCA46B12F3D39560045FEBD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -74,6 +98,7 @@
 			isa = PBXGroup;
 			children = (
 				7FCA46B02F3D39560045FEBD /* Kenwood control.app */,
+				AABBCC012F3D39560045FEBD /* Kenwood controlTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -104,6 +129,26 @@
 			productReference = 7FCA46B02F3D39560045FEBD /* Kenwood control.app */;
 			productType = "com.apple.product-type.application";
 		};
+		AABBCC052F3D39560045FEBD /* Kenwood controlTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AABBCC0A2F3D39570045FEBD /* Build configuration list for PBXNativeTarget "Kenwood controlTests" */;
+			buildPhases = (
+				AABBCC042F3D39560045FEBD /* Sources */,
+				AABBCC032F3D39560045FEBD /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AABBCC072F3D39560045FEBD /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AABBCC022F3D39560045FEBD /* Kenwood controlTests */,
+			);
+			name = "Kenwood controlTests";
+			productName = "Kenwood controlTests";
+			productReference = AABBCC012F3D39560045FEBD /* Kenwood controlTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -116,6 +161,10 @@
 				TargetAttributes = {
 					7FCA46AF2F3D39560045FEBD = {
 						CreatedOnToolsVersion = 26.3;
+					};
+					AABBCC052F3D39560045FEBD = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 7FCA46AF2F3D39560045FEBD;
 					};
 				};
 			};
@@ -134,6 +183,7 @@
 			projectRoot = "";
 			targets = (
 				7FCA46AF2F3D39560045FEBD /* Kenwood control */,
+				AABBCC052F3D39560045FEBD /* Kenwood controlTests */,
 			);
 		};
 /* End PBXProject section */
@@ -173,7 +223,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AABBCC042F3D39560045FEBD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		AABBCC072F3D39560045FEBD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FCA46AF2F3D39560045FEBD /* Kenwood control */;
+			targetProxy = AABBCC062F3D39560045FEBD /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		7FCA46B92F3D39570045FEBD /* Debug */ = {
@@ -388,6 +453,56 @@
 			};
 			name = Release;
 		};
+		AABBCC082F3D39570045FEBD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_BUNDLE_IDENTIFIER = "personal.Kenwood-control-tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kenwood control.app/Contents/MacOS/Kenwood control";
+			};
+			name = Debug;
+		};
+		AABBCC092F3D39570045FEBD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.2;
+				PRODUCT_BUNDLE_IDENTIFIER = "personal.Kenwood-control-tests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kenwood control.app/Contents/MacOS/Kenwood control";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -405,6 +520,15 @@
 			buildConfigurations = (
 				7FCA46BC2F3D39570045FEBD /* Debug */,
 				7FCA46BD2F3D39570045FEBD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AABBCC0A2F3D39570045FEBD /* Build configuration list for PBXNativeTarget "Kenwood controlTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AABBCC082F3D39570045FEBD /* Debug */,
+				AABBCC092F3D39570045FEBD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

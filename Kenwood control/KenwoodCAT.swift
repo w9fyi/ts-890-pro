@@ -350,7 +350,7 @@ enum KenwoodCAT {
     static func setAGC(_ mode: AGCMode) -> String { "GC\(mode.rawValue);" }
 
     // MARK: - Attenuator (RA)
-    // Format: RA00n; where n = 0 (off), 1 (6 dB), 2 (12 dB), 3 (18 dB)
+    // Format: RAn; where n = 0 (off), 1 (6 dB), 2 (12 dB), 3 (18 dB)
 
     enum AttenuatorLevel: Int, CaseIterable, Identifiable {
         case off = 0, db6 = 1, db12 = 2, db18 = 3
@@ -361,7 +361,7 @@ enum KenwoodCAT {
 
     static func getAttenuator() -> String { "RA;" }
     static func setAttenuator(_ level: AttenuatorLevel) -> String {
-        String(format: "RA00%d;", level.rawValue)
+        "RA\(level.rawValue);"
     }
 
     // MARK: - Preamp (PA)

@@ -2,15 +2,14 @@ import Foundation
 import Network
 
 final class TS890Connection {
-    enum Status: String { case disconnected, connecting, authenticating, connected }
     private enum AuthState { case idle, sentCN, sentID, authenticated }
 
-    var onStatusChange: ((Status) -> Void)?
+    var onStatusChange: ((CATConnectionStatus) -> Void)?
     var onError: ((String) -> Void)?
     var onFrame: ((String) -> Void)?
     var onLog: ((String) -> Void)?
 
-    private(set) var status: Status = .disconnected
+    private(set) var status: CATConnectionStatus = .disconnected
     private var connection: NWConnection?
     private let queue = DispatchQueue(label: "TS890Connection.queue")
     private var receiveBuffer = Data()
@@ -319,3 +318,5 @@ final class TS890Connection {
         keepaliveTimer = nil
     }
 }
+
+extension TS890Connection: CATTransport {}

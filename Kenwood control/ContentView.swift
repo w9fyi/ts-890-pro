@@ -126,6 +126,77 @@ private struct ConnectionSectionView: View {
                 Text("Connection")
                     .font(.title2)
 
+                // MARK: Transport selector
+                Picker("Connection Type", selection: $radio.connectionType) {
+                    ForEach(ConnectionType.allCases, id: \.self) { type in
+                        Text(type.rawValue).tag(type)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("Connection type")
+
+                if radio.connectionType == .usb {
+                    // MARK: USB / Serial
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 12) {
+                            Text("Serial Port:")
+                            if radio.availableSerialPorts.isEmpty {
+                                Text("No ports found")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Picker("Serial port", selection: $radio.selectedSerialPort) {
+                                    ForEach(radio.availableSerialPorts) { port in
+                                        Text(port.displayName).tag(port.path)
+                                    }
+                                }
+                                .frame(minWidth: 260)
+                            }
+                            Button("Refresh") { radio.scanSerialPorts() }
+                                .accessibilityLabel("Refresh serial port list")
+                        }
+
+                        HStack(spacing: 12) {
+                            Button("Connect") {
+                                guard !radio.selectedSerialPort.isEmpty else { return }
+                                AppFileLogger.shared.log("UI: USB Connect pressed port=\(radio.selectedSerialPort)")
+                                radio.connectUSB(portPath: radio.selectedSerialPort)
+                            }
+                            Button("Disconnect") { radio.disconnect() }
+                        }
+
+                        Text("Status: \(radio.connectionStatus)")
+                            .font(.system(.body, design: .monospaced))
+
+                        if let err = radio.lastError {
+                            Text(err)
+                                .foregroundStyle(.red)
+                                .font(.system(.body, design: .monospaced))
+                                .accessibilityLabel("Connection error: \(err)")
+                        }
+
+                        Divider()
+
+                        Toggle("Enable USB Audio Monitor", isOn: Binding(
+                            get: { radio.isAudioMonitorRunning },
+                            set: { enabled in
+                                if enabled { radio.startAudioMonitor() }
+                                else { radio.stopAudioMonitor() }
+                            }
+                        ))
+                        .accessibilityLabel("Enable USB Audio Monitor")
+                        .accessibilityValue(radio.isAudioMonitorRunning ? "On" : "Off")
+                        .accessibilityHint("When on, plays radio audio through Mac speakers with optional noise reduction")
+
+                        if let err = radio.audioMonitorError {
+                            Text(err)
+                                .foregroundStyle(.red)
+                                .font(.system(.body, design: .monospaced))
+                                .accessibilityLabel("Audio monitor error: \(err)")
+                        }
+                    }
+                    .onAppear { radio.scanSerialPorts() }
+                } else {
+                // MARK: LAN / KNS
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 12) {
                         Text("Host:")
@@ -209,6 +280,7 @@ private struct ConnectionSectionView: View {
                             .accessibilityLabel("Connection error: \(err)")
                     }
                 }
+                } // end else (LAN)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -838,214 +910,10 @@ private struct AudioSectionView: View {
                 Text("Audio")
                     .font(.title2)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Mic / VoIP")
-                        .font(.headline)
-
-                    HStack(spacing: 12) {
-                        Picker("Mic Input", selection: $radio.selectedLanMicInputUID) {
-                            if radio.audioInputDevices.isEmpty {
-                                Text("No input devices").tag("")
-                            } else {
-                                Text("System Default Input").tag("")
-                                ForEach(radio.audioInputDevices) { dev in
-                                    Text(dev.displayName).tag(dev.uid)
-                                }
-                            }
-                        }
-                        .frame(minWidth: 360)
-                        .accessibilityLabel("Microphone input device")
-
-                        Text(radio.selectedLanMicInputUID.isEmpty ? "(default)" : "custom")
-                            .font(.system(.body, design: .monospaced))
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 12) {
-                            Text("VoIP Volume:")
-                            Slider(value: Binding(
-                                get: { Double(radio.voipOutputLevel ?? 0) },
-                                set: { newValue in
-                                    let v = Int(newValue.rounded())
-                                    voipOutString = String(v)
-                                    radio.setVoipOutputLevelDebounced(v)
-                                }
-                            ), in: 0...100, step: 1)
-                            .frame(width: 240)
-
-                            TextField("0-100", text: $voipOutString)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 90)
-                                .onSubmit {
-                                    let v = Int(voipOutString) ?? 0
-                                    radio.setVoipOutputLevel(v)
-                                }
-
-                            Text(radio.voipOutputLevel != nil ? "\(radio.voipOutputLevel!)" : "n/a")
-                                .font(.system(.body, design: .monospaced))
-                        }
-                        Text("Adjusting the slider applies automatically.")
-                            .font(.footnote)
-                            .accessibilityLabel("Adjusting the VoIP volume slider applies automatically")
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 12) {
-                            Text("VoIP Mic:")
-                            Slider(value: Binding(
-                                get: { Double(radio.voipInputLevel ?? 0) },
-                                set: { newValue in
-                                    let v = Int(newValue.rounded())
-                                    voipInString = String(v)
-                                    radio.setVoipInputLevelDebounced(v)
-                                }
-                            ), in: 0...100, step: 1)
-                            .frame(width: 240)
-
-                            TextField("0-100", text: $voipInString)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 90)
-                                .onSubmit {
-                                    let v = Int(voipInString) ?? 0
-                                    radio.setVoipInputLevel(v)
-                                }
-
-                            Text(radio.voipInputLevel != nil ? "\(radio.voipInputLevel!)" : "n/a")
-                                .font(.system(.body, design: .monospaced))
-                        }
-                        Text("Adjusting the slider applies automatically.")
-                            .font(.footnote)
-                            .accessibilityLabel("Adjusting the VoIP mic slider applies automatically")
-                    }
-
-                    Text("If PTT keys but you have no modulation, set VoIP Mic above 0 (try 50).")
-                        .font(.footnote)
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Software Noise Reduction")
-                        .font(.headline)
-
-                    Toggle("Enable", isOn: Binding(
-                        get: { radio.isNoiseReductionEnabled },
-                        set: { radio.setNoiseReduction(enabled: $0) }
-                    ))
-                    .disabled(!radio.isNoiseReductionAvailable)
-                    .accessibilityValue(radio.isNoiseReductionEnabled ? "On" : "Off")
-
-                    Text("Shortcut: Command-Shift-N")
-                        .accessibilityLabel("Noise Reduction Shortcut: Command Shift N")
-
-                    if !radio.selectedNoiseReductionBackend.hasPrefix("WDSP") {
-                        Picker("NR Profile", selection: Binding(
-                            get: { radio.noiseReductionProfileRaw },
-                            set: { radio.setNoiseReductionProfile(rawValue: $0) }
-                        )) {
-                            Text(RadioState.NoiseReductionProfile.speech.rawValue).tag(RadioState.NoiseReductionProfile.speech.rawValue)
-                            Text(RadioState.NoiseReductionProfile.staticHiss.rawValue).tag(RadioState.NoiseReductionProfile.staticHiss.rawValue)
-                        }
-                        .frame(minWidth: 240)
-                        .accessibilityLabel("Noise reduction profile")
-
-                        HStack(spacing: 12) {
-                            Text("NR Strength")
-                                .accessibilityLabel("Noise reduction strength")
-                            Slider(value: Binding(
-                                get: { radio.noiseReductionStrength },
-                                set: { radio.setNoiseReductionStrength($0) }
-                            ), in: 0...1, step: 0.05)
-                            .frame(minWidth: 260)
-                            .accessibilityValue("\(Int(radio.noiseReductionStrength * 100)) percent")
-
-                            Text("\(Int(radio.noiseReductionStrength * 100))%")
-                                .font(.system(.body, design: .monospaced))
-                                .accessibilityHidden(true)
-                        }
-                    }
-
-                    HStack(spacing: 12) {
-                        Text("Backend:")
-                            .font(.system(.body, design: .monospaced))
-                        
-                        Picker("Noise Reduction Backend", selection: $radio.selectedNoiseReductionBackend) {
-                            ForEach(radio.availableNoiseReductionBackends, id: \.self) { backend in
-                                Text(backend).tag(backend)
-                            }
-                        }
-                        .onChange(of: radio.selectedNoiseReductionBackend) { _, newBackend in
-                            radio.setNoiseReductionBackend(newBackend)
-                        }
-                        .frame(minWidth: 260)
-                    }
-                    .accessibilityLabel("Noise reduction backend selector")
-                    .accessibilityValue(radio.noiseReductionBackend)
-
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("LAN RX Audio")
-                        .font(.headline)
-
-                    Toggle("Auto-start LAN audio when connected", isOn: $radio.autoStartLanAudio)
-
-                    HStack(spacing: 12) {
-                        Picker("Output", selection: $radio.selectedLanAudioOutputUID) {
-                            if radio.audioOutputDevices.isEmpty {
-                                Text("No output devices").tag("")
-                            } else {
-                                Text("System Default Output").tag("")
-                                ForEach(radio.audioOutputDevices) { dev in
-                                    Text(dev.displayName).tag(dev.uid)
-                                }
-                            }
-                        }
-                        .frame(minWidth: 360)
-                        .accessibilityLabel("Mac speaker output device")
-                        .onChange(of: radio.selectedLanAudioOutputUID) { _, newUID in
-                            AppFileLogger.shared.log("UI: LAN output selection uid=\(newUID.isEmpty ? "(default)" : newUID)")
-                            radio.applyLanAudioOutputSelection()
-                        }
-
-                        Button("Refresh Audio Devices") { radio.refreshAudioDevices() }
-
-                        Text(radio.isLanAudioRunning ? "Running" : "Stopped")
-                            .font(.system(.body, design: .monospaced))
-                    }
-
-                    HStack(spacing: 12) {
-                        Text("Volume:")
-                        Slider(value: Binding(
-                            get: { radio.lanAudioOutputGain },
-                            set: { radio.setLanAudioOutputGain($0) }
-                        ), in: 0.1...4.0)
-                        .frame(width: 240)
-
-                        Text(String(format: "%.2f", radio.lanAudioOutputGain))
-                            .font(.system(.body, design: .monospaced))
-                            .frame(width: 64, alignment: .trailing)
-                    }
-
-                    if let err = radio.lanAudioError {
-                        Text("LAN Audio Error: \(err)")
-                            .foregroundStyle(.red)
-                            .accessibilityLabel("LAN audio error \(err)")
-                    }
-
-                    HStack(spacing: 12) {
-                        Text("Packets: \(radio.lanAudioPacketCount)")
-                            .font(.system(.body, design: .monospaced))
-                        if let t = radio.lanAudioLastPacketAt {
-                            Text("Last: \(t.formatted(date: .omitted, time: .standard))")
-                                .font(.system(.body, design: .monospaced))
-                        } else {
-                            Text("Last: (none)")
-                                .font(.system(.body, design: .monospaced))
-                        }
-                    }
+                if radio.connectionType == .usb {
+                    usbAudioBody
+                } else {
+                    lanAudioBody
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1060,6 +928,329 @@ private struct AudioSectionView: View {
         }
         .onChange(of: radio.voipInputLevel) { _, newValue in
             if let v = newValue { voipInString = String(v) }
+        }
+    }
+
+    // MARK: - USB Audio Body
+
+    @ViewBuilder private var usbAudioBody: some View {
+        // USB Audio Monitor device selection and volume
+        VStack(alignment: .leading, spacing: 10) {
+            Text("USB Audio Monitor")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                Text("Radio Audio Input:")
+                Picker("Radio audio input", selection: $radio.selectedAudioInputUID) {
+                    Text("System Default Input").tag("")
+                    ForEach(radio.audioInputDevices) { dev in
+                        Text(dev.displayName).tag(dev.uid)
+                    }
+                }
+                .frame(minWidth: 300)
+                .accessibilityLabel("Radio audio input device. Select the USB Audio CODEC for TS-890S USB audio.")
+            }
+
+            HStack(spacing: 12) {
+                Text("Mac Speaker Output:")
+                Picker("Mac speaker output", selection: $radio.selectedAudioOutputUID) {
+                    Text("System Default Output").tag("")
+                    ForEach(radio.audioOutputDevices) { dev in
+                        Text(dev.displayName).tag(dev.uid)
+                    }
+                }
+                .frame(minWidth: 300)
+                .accessibilityLabel("Mac speaker output device")
+            }
+
+            HStack(spacing: 12) {
+                Text("Volume:")
+                Slider(value: Binding(
+                    get: { radio.audioMonitorOutputGain },
+                    set: { radio.setAudioMonitorOutputGain($0) }
+                ), in: 0.1...4.0)
+                .frame(width: 240)
+                .accessibilityValue(String(format: "%.2f", radio.audioMonitorOutputGain))
+
+                Text(String(format: "%.2f", radio.audioMonitorOutputGain))
+                    .font(.system(.body, design: .monospaced))
+                    .frame(width: 64, alignment: .trailing)
+                    .accessibilityHidden(true)
+            }
+
+            HStack(spacing: 12) {
+                Toggle("Mute", isOn: Binding(
+                    get: { radio.isAudioMuted },
+                    set: { radio.setAudioMuted($0) }
+                ))
+                .accessibilityLabel("Mute Mac speaker output")
+                .accessibilityValue(radio.isAudioMuted ? "Muted" : "Active")
+
+                Button("Refresh Audio Devices") { radio.refreshAudioDevices() }
+            }
+
+            Text(radio.isAudioMonitorRunning ? "Running" : "Stopped — use the toggle in Connection to start")
+                .font(.system(.body, design: .monospaced))
+                .accessibilityLabel(radio.isAudioMonitorRunning ? "Audio monitor running" : "Audio monitor stopped. Use the Enable USB Audio Monitor toggle in the Connection section to start it.")
+        }
+
+        // NR controls — only shown when monitor is active
+        if radio.isAudioMonitorRunning {
+            Divider()
+            noiseReductionBody
+        }
+
+        Divider()
+
+        // Digital mode configuration
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Digital Mode Configuration")
+                .font(.headline)
+
+            if radio.isConfiguredForDigitalMode {
+                Text("Radio is configured for WSJT-X")
+                    .bold()
+                    .foregroundStyle(.green)
+                    .accessibilityLabel("Radio is configured for WSJT-X digital mode")
+
+                Button("Revert Radio to Voice Mode") {
+                    radio.revertFromDigitalMode()
+                }
+                .accessibilityLabel("Revert Radio to Voice Mode")
+                .accessibilityHint("Restores the radio to its previous mode and sets TX audio back to microphone")
+
+                Text("Press Revert when finished with digital mode to restore voice mode and microphone TX audio.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Button("Configure Radio for WSJT-X") {
+                    radio.configureForDigitalMode()
+                }
+                .accessibilityLabel("Configure Radio for WSJT-X")
+                .accessibilityHint("Switches the radio to USB-DATA mode and sets TX audio source to USB Audio")
+
+                Text("Switches to USB-DATA mode and sets TX audio to USB. Use this before starting WSJT-X or other digital mode software. PTT is controlled by your software via the second virtual COM port (cu.SLAB_USBtoUART7). A notification will confirm when the radio is ready.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - LAN Audio Body
+
+    @ViewBuilder private var lanAudioBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Mic / VoIP")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                Picker("Mic Input", selection: $radio.selectedLanMicInputUID) {
+                    if radio.audioInputDevices.isEmpty {
+                        Text("No input devices").tag("")
+                    } else {
+                        Text("System Default Input").tag("")
+                        ForEach(radio.audioInputDevices) { dev in
+                            Text(dev.displayName).tag(dev.uid)
+                        }
+                    }
+                }
+                .frame(minWidth: 360)
+                .accessibilityLabel("Microphone input device")
+
+                Text(radio.selectedLanMicInputUID.isEmpty ? "(default)" : "custom")
+                    .font(.system(.body, design: .monospaced))
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    Text("VoIP Volume:")
+                    Slider(value: Binding(
+                        get: { Double(radio.voipOutputLevel ?? 0) },
+                        set: { newValue in
+                            let v = Int(newValue.rounded())
+                            voipOutString = String(v)
+                            radio.setVoipOutputLevelDebounced(v)
+                        }
+                    ), in: 0...100, step: 1)
+                    .frame(width: 240)
+
+                    TextField("0-100", text: $voipOutString)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                        .onSubmit {
+                            let v = Int(voipOutString) ?? 0
+                            radio.setVoipOutputLevel(v)
+                        }
+
+                    Text(radio.voipOutputLevel != nil ? "\(radio.voipOutputLevel!)" : "n/a")
+                        .font(.system(.body, design: .monospaced))
+                }
+                Text("Adjusting the slider applies automatically.")
+                    .font(.footnote)
+                    .accessibilityLabel("Adjusting the VoIP volume slider applies automatically")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    Text("VoIP Mic:")
+                    Slider(value: Binding(
+                        get: { Double(radio.voipInputLevel ?? 0) },
+                        set: { newValue in
+                            let v = Int(newValue.rounded())
+                            voipInString = String(v)
+                            radio.setVoipInputLevelDebounced(v)
+                        }
+                    ), in: 0...100, step: 1)
+                    .frame(width: 240)
+
+                    TextField("0-100", text: $voipInString)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                        .onSubmit {
+                            let v = Int(voipInString) ?? 0
+                            radio.setVoipInputLevel(v)
+                        }
+
+                    Text(radio.voipInputLevel != nil ? "\(radio.voipInputLevel!)" : "n/a")
+                        .font(.system(.body, design: .monospaced))
+                }
+                Text("Adjusting the slider applies automatically.")
+                    .font(.footnote)
+                    .accessibilityLabel("Adjusting the VoIP mic slider applies automatically")
+            }
+
+            Text("If PTT keys but you have no modulation, set VoIP Mic above 0 (try 50).")
+                .font(.footnote)
+        }
+
+        Divider()
+        noiseReductionBody
+
+        Divider()
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("LAN RX Audio")
+                .font(.headline)
+
+            Toggle("Auto-start LAN audio when connected", isOn: $radio.autoStartLanAudio)
+
+            HStack(spacing: 12) {
+                Picker("Output", selection: $radio.selectedLanAudioOutputUID) {
+                    if radio.audioOutputDevices.isEmpty {
+                        Text("No output devices").tag("")
+                    } else {
+                        Text("System Default Output").tag("")
+                        ForEach(radio.audioOutputDevices) { dev in
+                            Text(dev.displayName).tag(dev.uid)
+                        }
+                    }
+                }
+                .frame(minWidth: 360)
+                .accessibilityLabel("Mac speaker output device")
+                .onChange(of: radio.selectedLanAudioOutputUID) { _, newUID in
+                    AppFileLogger.shared.log("UI: LAN output selection uid=\(newUID.isEmpty ? "(default)" : newUID)")
+                    radio.applyLanAudioOutputSelection()
+                }
+
+                Button("Refresh Audio Devices") { radio.refreshAudioDevices() }
+
+                Text(radio.isLanAudioRunning ? "Running" : "Stopped")
+                    .font(.system(.body, design: .monospaced))
+            }
+
+            HStack(spacing: 12) {
+                Text("Volume:")
+                Slider(value: Binding(
+                    get: { radio.lanAudioOutputGain },
+                    set: { radio.setLanAudioOutputGain($0) }
+                ), in: 0.1...4.0)
+                .frame(width: 240)
+
+                Text(String(format: "%.2f", radio.lanAudioOutputGain))
+                    .font(.system(.body, design: .monospaced))
+                    .frame(width: 64, alignment: .trailing)
+            }
+
+            if let err = radio.lanAudioError {
+                Text("LAN Audio Error: \(err)")
+                    .foregroundStyle(.red)
+                    .accessibilityLabel("LAN audio error \(err)")
+            }
+
+            HStack(spacing: 12) {
+                Text("Packets: \(radio.lanAudioPacketCount)")
+                    .font(.system(.body, design: .monospaced))
+                if let t = radio.lanAudioLastPacketAt {
+                    Text("Last: \(t.formatted(date: .omitted, time: .standard))")
+                        .font(.system(.body, design: .monospaced))
+                } else {
+                    Text("Last: (none)")
+                        .font(.system(.body, design: .monospaced))
+                }
+            }
+        }
+    }
+
+    // MARK: - Shared NR Controls
+
+    @ViewBuilder private var noiseReductionBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Software Noise Reduction")
+                .font(.headline)
+
+            Toggle("Enable", isOn: Binding(
+                get: { radio.isNoiseReductionEnabled },
+                set: { radio.setNoiseReduction(enabled: $0) }
+            ))
+            .disabled(!radio.isNoiseReductionAvailable)
+            .accessibilityValue(radio.isNoiseReductionEnabled ? "On" : "Off")
+
+            Text("Shortcut: Command-Shift-N")
+                .accessibilityLabel("Noise Reduction Shortcut: Command Shift N")
+
+            if !radio.selectedNoiseReductionBackend.hasPrefix("WDSP") {
+                Picker("NR Profile", selection: Binding(
+                    get: { radio.noiseReductionProfileRaw },
+                    set: { radio.setNoiseReductionProfile(rawValue: $0) }
+                )) {
+                    Text(RadioState.NoiseReductionProfile.speech.rawValue).tag(RadioState.NoiseReductionProfile.speech.rawValue)
+                    Text(RadioState.NoiseReductionProfile.staticHiss.rawValue).tag(RadioState.NoiseReductionProfile.staticHiss.rawValue)
+                }
+                .frame(minWidth: 240)
+                .accessibilityLabel("Noise reduction profile")
+
+                HStack(spacing: 12) {
+                    Text("NR Strength")
+                        .accessibilityLabel("Noise reduction strength")
+                    Slider(value: Binding(
+                        get: { radio.noiseReductionStrength },
+                        set: { radio.setNoiseReductionStrength($0) }
+                    ), in: 0...1, step: 0.05)
+                    .frame(minWidth: 260)
+                    .accessibilityValue("\(Int(radio.noiseReductionStrength * 100)) percent")
+
+                    Text("\(Int(radio.noiseReductionStrength * 100))%")
+                        .font(.system(.body, design: .monospaced))
+                        .accessibilityHidden(true)
+                }
+            }
+
+            HStack(spacing: 12) {
+                Text("Backend:")
+                    .font(.system(.body, design: .monospaced))
+
+                Picker("Noise Reduction Backend", selection: $radio.selectedNoiseReductionBackend) {
+                    ForEach(radio.availableNoiseReductionBackends, id: \.self) { backend in
+                        Text(backend).tag(backend)
+                    }
+                }
+                .onChange(of: radio.selectedNoiseReductionBackend) { _, newBackend in
+                    radio.setNoiseReductionBackend(newBackend)
+                }
+                .frame(minWidth: 260)
+            }
+            .accessibilityLabel("Noise reduction backend selector")
+            .accessibilityValue(radio.noiseReductionBackend)
         }
     }
 }

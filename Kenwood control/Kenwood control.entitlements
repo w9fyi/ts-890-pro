@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>com.apple.security.app-sandbox</key>
-    <true/>
+    <false/>
     <!-- Allow hosting third-party Audio Unit components (e.g. rnnoise.component). -->
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
@@ -17,6 +17,16 @@
 	<true/>
 	<key>com.apple.security.files.downloads.read-write</key>
 	<true/>
+    <!-- Allow USB serial port access via IOKit (CP210x, FTDI, etc. for radio USB CAT). -->
+    <key>com.apple.security.temporary-exception.iokit-user-client-class</key>
+    <array>
+        <string>IOSerialBSDClient</string>
+    </array>
+    <!-- Allow open() on /dev/cu.* device nodes (required alongside IOKit entitlement). -->
+    <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+    <array>
+        <string>/dev/</string>
+    </array>
     <!-- Debug-only convenience: allow reading user-installed Audio Unit components. -->
     <key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
     <array>

@@ -14,6 +14,11 @@ final class AudioRingBuffer {
         storage = Array(repeating: 0, count: max(1, capacitySamples))
     }
 
+    // Swift 6.1 on macOS 26 routes class deinit through swift_task_deinitOnExecutorImpl
+    // (isolated deinit) even for non-isolated classes, which crashes in the task-local
+    // cleanup. Marking deinit nonisolated opts out of that path.
+    nonisolated deinit {}
+
     var capacity: Int { storage.count }
 
     func availableToRead() -> Int {

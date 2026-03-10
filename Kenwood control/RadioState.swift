@@ -1,10 +1,41 @@
 import Foundation
-import Combine
+import Observation
 import CoreAudio
 import UserNotifications
 #if canImport(AppKit)
 import AppKit
 #endif
+
+/// Holds live meter readings in a dedicated observable so that SM-frame
+/// updates only re-render views that actually read meter data.
+@Observable
+final class MeterStore {
+    static let shared = MeterStore()
+    private init() {}
+    var readings: [Int: Double] = [:]
+}
+
+/// Holds bandscope data in a dedicated observable so that high-rate ##DD2
+/// frames (~5fps on LAN) only re-render the scope view.
+@Observable
+final class ScopeStore {
+    static let shared = ScopeStore()
+    private init() {}
+    var points: [UInt8] = []
+}
+
+/// Holds diagnostic frame log strings in a dedicated observable.
+@Observable
+final class DiagnosticsStore {
+    static let shared = DiagnosticsStore()
+    private init() {}
+    var lastTXFrame: String = ""
+    var lastRXFrame: String = ""
+    var lastError: String? = nil
+    var errorLog: [String] = []
+    /// All CAT commands sent this session in order — used by unit tests.
+    var txLog: [String] = []
+}
 
 struct MemoryChannel: Identifiable {
     let id: Int            // channel number 0–119
@@ -18,7 +49,8 @@ struct MemoryChannel: Identifiable {
     }
 }
 
-final class RadioState: ObservableObject {
+@Observable
+final class RadioState {
     enum ConnectionStatus: String { case disconnected = "Disconnected", connecting = "Connecting", authenticating = "Authenticating", connected = "Connected" }
     enum NoiseReductionProfile: String, CaseIterable {
         // Minimal, predictable presets. Users can fine-tune with NR Strength.
@@ -33,124 +65,259 @@ final class RadioState: ObservableObject {
         }
     }
 
-    @Published var connectionStatus: String = ConnectionStatus.disconnected.rawValue
-    @Published var lastRXFrame: String = ""
-    @Published var lastTXFrame: String = ""
-    @Published var vfoAFrequencyHz: Int?
-    @Published var vfoBFrequencyHz: Int?
-    @Published var operatingMode: KenwoodCAT.OperatingMode?
-    @Published var transceiverNRMode: KenwoodCAT.NoiseReductionMode?
-    @Published var isNotchEnabled: Bool?
-    @Published var rfGain: Int?
-    @Published var afGain: Int?
-    @Published var squelchLevel: Int?
-    @Published var sMeterDots: Int?
-    @Published var rxVFO: KenwoodCAT.VFO?
-    @Published var txVFO: KenwoodCAT.VFO?
-    @Published var ritEnabled: Bool?
-    @Published var xitEnabled: Bool?
-    @Published var ritXitOffsetHz: Int?
-    @Published var rxFilterShiftHz: Int?
-    @Published var rxFilterLowCutID: Int?
-    @Published var rxFilterHighCutID: Int?
-    @Published var outputPowerWatts: Int?
-    @Published var atuTxEnabled: Bool?
-    @Published var atuTuningActive: Bool?
-    @Published var splitOffsetSettingActive: Bool?
-    @Published var splitOffsetPlus: Bool?
-    @Published var splitOffsetKHz: Int?
-    @Published var isTransmitting: Bool?
-    @Published var isPTTDown: Bool = false
-    @Published var isMemoryMode: Bool?
-    @Published var memoryChannelNumber: Int?
-    @Published var memoryChannelFrequencyHz: Int?
-    @Published var memoryChannelMode: KenwoodCAT.OperatingMode?
-    @Published var memoryChannelName: String?
-    @Published var lastError: String?
-    @Published var isNoiseReductionEnabled: Bool = false
-    @Published var noiseReductionBackend: String = "Passthrough"
-    @Published var availableNoiseReductionBackends: [String] = []
-    @Published var selectedNoiseReductionBackend: String = "Passthrough"
-    @Published var noiseReductionStrength: Double = 1.0
-    @Published var noiseReductionProfileRaw: String = NoiseReductionProfile.speech.rawValue
-    @Published var errorLog: [String] = []
-    @Published var connectionLog: [String] = []
-    @Published var smokeTestStatus: String = "Not run"
-    @Published var useKnsLogin: Bool = true
-    @Published var adminId: String = ""
-    @Published var adminPassword: String = ""
-    @Published var knsAccountType: String = KenwoodKNS.AccountType.administrator.rawValue
+    /// Whether the front-panel NR button controls the radio's built-in NR or the app's WDSP NR.
+    enum NRButtonMode: String {
+        case hardware  // uses NR CAT command (NR0/NR1/NR2)
+        case software  // uses WDSP inside the app
+    }
+
+    /// Three-state cycle for the software (WDSP) NR path: Off → ANR → EMNR → Off.
+    enum SoftwareNRState: String, CaseIterable {
+        case off   = "Off"
+        case anr   = "ANR"
+        case emnr  = "EMNR"
+
+        var next: SoftwareNRState {
+            switch self {
+            case .off:  return .anr
+            case .anr:  return .emnr
+            case .emnr: return .off
+            }
+        }
+    }
+
+    /// Controls whether the per-slot filter popover shows Hi/Lo-cut sliders or an IF-Shift slider.
+    enum FilterSlotDisplayMode: String {
+        case hiLoCut = "hilocut"
+        case ifShift = "ifshift"
+    }
+
+    var connectionStatus: String = ConnectionStatus.disconnected.rawValue
+    var vfoAFrequencyHz: Int?
+    var vfoBFrequencyHz: Int?
+    var operatingMode: KenwoodCAT.OperatingMode?
+    var transceiverNRMode: KenwoodCAT.NoiseReductionMode?
+    var isNotchEnabled: Bool?
+    var rfGain: Int?
+    var afGain: Int?
+    var squelchLevel: Int?
+    var sMeterDots: Int?
+    var rxVFO: KenwoodCAT.VFO?
+    var txVFO: KenwoodCAT.VFO?
+    var ritEnabled: Bool?
+    var xitEnabled: Bool?
+    var ritXitOffsetHz: Int?
+    var rxFilterShiftHz: Int?
+    var rxFilterLowCutID: Int?
+    var rxFilterHighCutID: Int?
+    var txFilterLowCutID: Int?
+    var txFilterHighCutID: Int?
+    var outputPowerWatts: Int?
+    var atuTxEnabled: Bool?
+    var atuTuningActive: Bool?
+    var splitOffsetSettingActive: Bool?
+    var splitOffsetPlus: Bool?
+    var splitOffsetKHz: Int?
+    var isTransmitting: Bool?
+    var isPTTDown: Bool = false
+    var isMemoryMode: Bool?
+    var memoryChannelNumber: Int?
+    var memoryChannelFrequencyHz: Int?
+    var memoryChannelMode: KenwoodCAT.OperatingMode?
+    var memoryChannelName: String?
+    var scanActive: Bool = false
+    var isNoiseReductionEnabled: Bool = false
+    var noiseReductionBackend: String = "Passthrough"
+    var availableNoiseReductionBackends: [String] = []
+    var selectedNoiseReductionBackend: String = "Passthrough"
+    var noiseReductionStrength: Double = 1.0
+    var noiseReductionProfileRaw: String = NoiseReductionProfile.speech.rawValue
+    /// Which NR path the front-panel NR button controls (hardware vs software).
+    var nrButtonMode: NRButtonMode = .hardware
+    /// Current state of the software NR cycle (Off / ANR / EMNR).
+    var softwareNRState: SoftwareNRState = .off
+    var connectionLog: [String] = []
+    var smokeTestStatus: String = "Not run"
+    var useKnsLogin: Bool = true
+    var adminId: String = ""
+    var adminPassword: String = ""
+    var knsAccountType: String = KenwoodKNS.AccountType.administrator.rawValue
     /// When enabled, plays "CQ" as Morse code tones through the Mac's speakers on connect
     /// and "73" on disconnect. Purely local audio — no RF transmission.
-    @Published var cwGreetingEnabled: Bool = false
+    var cwGreetingEnabled: Bool = false {
+        didSet {
+            guard oldValue != cwGreetingEnabled else { return }
+            UserDefaults.standard.set(cwGreetingEnabled, forKey: "CWGreetingEnabled")
+        }
+    }
 
     // Audio monitor (USB audio in -> NR -> speakers out)
-    @Published var audioInputDevices: [AudioDeviceInfo] = []
-    @Published var audioOutputDevices: [AudioDeviceInfo] = []
-    @Published var selectedAudioInputUID: String = ""
-    @Published var selectedAudioOutputUID: String = ""
-    @Published var isAudioMonitorRunning: Bool = false
-    @Published var audioMonitorError: String?
-    @Published var audioMonitorLog: [String] = []
-    @Published var audioMonitorWetDry: Double = 1.0
-    @Published var audioMonitorInputGain: Double = 1.0
-    @Published var audioMonitorOutputGain: Double = 1.0
+    var audioInputDevices: [AudioDeviceInfo] = []
+    var audioOutputDevices: [AudioDeviceInfo] = []
+    var selectedAudioInputUID: String = "" {
+        didSet {
+            guard oldValue != selectedAudioInputUID else { return }
+            UserDefaults.standard.set(selectedAudioInputUID, forKey: audioInputUIDKey)
+        }
+    }
+    var selectedAudioOutputUID: String = ""
+    var isAudioMonitorRunning: Bool = false
+    var audioMonitorError: String?
+    var audioMonitorLog: [String] = []
+    var audioMonitorWetDry: Double = 1.0
+    var audioMonitorInputGain: Double = 1.0
+    var audioMonitorOutputGain: Double = 1.0
+
+    // MARK: - TX Audio (USB mic passthrough → USB Codec)
+    enum TXAudioSource: String {
+        case hardware        // Front panel mic, no app involvement (MS001)
+        case usbPassthrough  // Mac USB mic → TS-890S USB Codec (MS002)
+    }
+    var txAudioSource: TXAudioSource = .hardware
+    var selectedTXMicInputUID: String = "" {
+        didSet {
+            guard oldValue != selectedTXMicInputUID else { return }
+            UserDefaults.standard.set(selectedTXMicInputUID, forKey: txMicInputUIDKey)
+        }
+    }
+    var selectedTXCodecOutputUID: String = "" {
+        didSet {
+            guard oldValue != selectedTXCodecOutputUID else { return }
+            UserDefaults.standard.set(selectedTXCodecOutputUID, forKey: txCodecOutputUIDKey)
+        }
+    }
+    var isTXPassthroughRunning: Bool = false
+    var txPassthroughError: String?
+    var txPassthroughInputGain: Double = 1.0
 
     // LAN audio (UDP 60001) experimental RX path
-    @Published var isLanAudioRunning: Bool = false
-    @Published var lanAudioError: String?
-    @Published var lanAudioWetDry: Double = 1.0
-    @Published var lanAudioOutputGain: Double = 1.0
-    @Published var isAudioMuted: Bool = false
-    @Published var selectedLanAudioOutputUID: String = ""
-    @Published var lanAudioPacketCount: Int = 0
-    @Published var lanAudioLastPacketAt: Date?
-    @Published var autoStartLanAudio: Bool = true
-    @Published var voipOutputLevel: Int?
-    @Published var voipInputLevel: Int?
-    @Published var selectedLanMicInputUID: String = ""
-    @Published var dataModeEnabled: Bool?
-    @Published var mdMode: Int?
+    var isLanAudioRunning: Bool = false
+    var lanAudioError: String?
+    var lanAudioWetDry: Double = 1.0
+    var lanAudioOutputGain: Double = 1.0
+    var isAudioMuted: Bool = false
+    var selectedLanAudioOutputUID: String = "" {
+        didSet {
+            guard oldValue != selectedLanAudioOutputUID else { return }
+            UserDefaults.standard.set(selectedLanAudioOutputUID, forKey: lanAudioOutputUIDKey)
+            switchLanAudioOutputIfRunning()
+        }
+    }
+    var lanAudioPacketCount: Int = 0
+    var lanAudioLastPacketAt: Date?
+    var autoStartLanAudio: Bool = true
+    var voipOutputLevel: Int?
+    var voipInputLevel: Int?
 
-    // MARK: - Built-in Radio EQ (via EX extended menu commands)
-    // TX EQ: EX030 (low), EX031 (mid), EX032 (high)   range: −20…+10 dB
-    // RX EQ: EX060 (low), EX061 (mid), EX062 (high)   range: −20…+10 dB
-    @Published var txEQLowGain: Int? = nil
-    @Published var txEQMidGain: Int? = nil
-    @Published var txEQHighGain: Int? = nil
-    @Published var rxEQLowGain: Int? = nil
-    @Published var rxEQMidGain: Int? = nil
-    @Published var rxEQHighGain: Int? = nil
+    // MARK: KNS admin settings (populated by queryKNSAdminSettings)
+    var knsMode: Int = 0                 // ##KN0: 0=off 1=LAN 2=internet
+    var knsVoipEnabled: Bool = false     // ##KN2
+    var knsJitterBuffer: Int = 10        // ##KN4 raw P1 (04/10/25/40)
+    var knsSpeakerMute: Bool = false     // ##KN5
+    var knsAccessLog: Bool = false       // ##KN6
+    var knsUserRemoteOps: Bool = false   // ##KN7
+    var knsUserCount: Int = 0            // ##KN8
+    var knsWelcomeMessage: String = ""   // ##KNC
+    var knsSessionTimeout: Int = 13      // ##KND raw (13 = Unlimited)
+    var knsUsers: [KNSUser] = []         // populated by loadAllKNSUsers()
+    var knsAdminChangeResult: String = ""   // ##KN1 result
+    var knsPasswordChangeResult: String = "" // ##KNE result
+    private var _knsLoadUsersAfterCount = false
+    var selectedLanMicInputUID: String = "" {
+        didSet {
+            guard oldValue != selectedLanMicInputUID else { return }
+            UserDefaults.standard.set(selectedLanMicInputUID, forKey: lanMicInputUIDKey)
+        }
+    }
+    var dataModeEnabled: Bool?
+    var mdMode: Int?
+
+    // MARK: - Built-in Radio EQ (UT/UR — 18-band graphic EQ)
+    var txEQBands: [Int] = Array(repeating: 0, count: 18)
+    var rxEQBands: [Int] = Array(repeating: 0, count: 18)
+    var txEQPreset: KenwoodCAT.EQPreset? = nil
+    var rxEQPreset: KenwoodCAT.EQPreset? = nil
 
     // General EX menu value store for the Menu Access view (menu# → last-seen value)
-    @Published var exMenuValues: [Int: Int] = [:]
+    var exMenuValues: [Int: Int] = [:]
+
+    // MARK: - EX menu discovery scan
+    var menuDiscoveryRunning: Bool = false
+    var menuDiscoveryProgress: Double = 0      // 0.0–1.0 while scanning; 1.0 when done
+    var menuDiscoverySnapshot: [(number: Int, value: Int)] = []
+    var menuDiscoveryResponseCount: Int = 0    // live count of EX responses received
+    var menuDiscoverySentCount: Int = 0        // live count of queries actually transmitted
+    var menuDiscoveryTotalCount: Int = 0       // total queries planned for this scan
 
     // MARK: - New DSP / TX / CW controls (ARCP-890 parity)
-    @Published var agcMode: KenwoodCAT.AGCMode?
-    @Published var attenuatorLevel: KenwoodCAT.AttenuatorLevel?
-    @Published var preampEnabled: Bool?
-    @Published var noiseBlankerEnabled: Bool?
-    @Published var beatCancelEnabled: Bool?
-    @Published var micGain: Int?           // 0-100
-    @Published var voxEnabled: Bool?
-    @Published var monitorLevel: Int?      // 0=off, 1-100
-    @Published var speechProcEnabled: Bool?
-    @Published var cwKeySpeedWPM: Int?     // 4-100
-    @Published var cwBreakInMode: KenwoodCAT.CWBreakInMode?
+    var agcMode: KenwoodCAT.AGCMode?
+    var attenuatorLevel: KenwoodCAT.AttenuatorLevel?
+    var preampLevel: KenwoodCAT.PreampLevel?
+    var filterSlot: KenwoodCAT.FilterSlot?
+    /// Per-slot display mode (Hi/Lo-cut vs IF-Shift). Persisted to UserDefaults.
+    var filterSlotDisplayModes: [FilterSlotDisplayMode] = [.hiLoCut, .hiLoCut, .hiLoCut] {
+        didSet {
+            guard oldValue != filterSlotDisplayModes else { return }
+            UserDefaults.standard.set(filterSlotDisplayModes.map { $0.rawValue },
+                                      forKey: "filterSlotDisplayModes")
+        }
+    }
+    /// Per-slot IF Shift in Hz. Saved/restored when the user switches filter slots.
+    var filterSlotIFShiftHz: [Int] = [0, 0, 0] {
+        didSet {
+            guard oldValue != filterSlotIFShiftHz else { return }
+            UserDefaults.standard.set(filterSlotIFShiftHz, forKey: "filterSlotIFShiftHz")
+        }
+    }
+    var noiseBlankerEnabled: Bool?
+    var beatCancelMode: KenwoodCAT.BeatCancelMode?
+    var micGain: Int?           // 0-100
+    var voxEnabled: Bool?
+    var monitorLevel: Int?      // 0=off, 1-100
+    var speechProcEnabled: Bool?
+    var cwKeySpeedWPM: Int?     // 4-100
+    var cwBreakInMode: KenwoodCAT.CWBreakInMode?
     /// Raw SM readings keyed by smIndex (0=S-meter,1=COMP,2=ALC,3=SWR,5=power).
-    @Published var meterReadings: [Int: Double] = [:]
+    /// Stored in MeterStore so updates do NOT fire RadioState.objectWillChange,
+    /// preventing meter polling from triggering full-tree SwiftUI re-renders.
+    var meterReadings: [Int: Double] {
+        get { MeterStore.shared.readings }
+        set { MeterStore.shared.readings = newValue }
+    }
 
     // MARK: - Memory browser (all 120 channels)
-    @Published var memoryChannels: [MemoryChannel] = []
-    @Published var isLoadingAllMemories: Bool = false
+    var memoryChannels: [MemoryChannel] = []
+    var isLoadingAllMemories: Bool = false
 
     // MARK: - Connection type (LAN / USB)
-    @Published var connectionType: ConnectionType = .lan
-    @Published var availableSerialPorts: [SerialPort] = []
-    @Published var selectedSerialPort: String = ""
+    var connectionType: ConnectionType = .lan
+    var availableSerialPorts: [SerialPort] = []
+    var selectedSerialPort: String = ""
+
+    // MARK: - Bandscope / Waterfall
+    /// Current span in kHz from BS4 (5/10/25/50/100/200/500). Default 50.
+    var scopeSpanKHz: Int = 50
 
     // MARK: - Digital mode configuration state
-    @Published var isConfiguredForDigitalMode: Bool = false
+    var isConfiguredForDigitalMode: Bool = false
+
+    // MARK: - FreeDV state
+    enum FreeDVAudioPath: String, CaseIterable { case lan = "LAN (KNS)", usb = "USB Audio" }
+    var freedvIsActive:        Bool   = false
+    var freedvMode:            FreeDVEngine.Mode = .mode700D
+    var freedvAudioPath:       FreeDVAudioPath = .lan
+    var freedvSync:            Bool   = false
+    var freedvSnrDB:           Float  = 0
+    var freedvBer:             Float  = 0
+    var freedvTotalBits:       Int    = 0
+    var freedvTotalBitErrors:  Int    = 0
+    var freedvRxStatus:        Int32  = 0
+    var freedvReceivedText:    String = ""
+    var freedvTxCallsign:      String = UserDefaults.standard.string(forKey: "freedv_callsign") ?? "AI5OS"
+    var freedvError:           String?
+
+    var radioModel: KenwoodRadioModel = .ts890s
+    var capabilities: KenwoodCapabilities = KenwoodCapabilities.capabilities(for: .ts890s)
 
     private var connection: any CATTransport = TS890Connection()
     private var previousOperatingModeForDigital: KenwoodCAT.OperatingMode? = nil
@@ -163,6 +330,7 @@ final class RadioState: ObservableObject {
         set { processorProxy.inner = newValue }
     }
     private var audioMonitor: AudioMonitor?
+    private var txPassthrough: AudioPassthrough?
     private var lanReceiver: KenwoodLanAudioReceiver?
     private var lanPipeline: LanAudioPipeline?
     private var lanPlayer: AudioOutputPlayer?
@@ -183,9 +351,16 @@ final class RadioState: ObservableObject {
     // Pre-computed PCM16 buffer for digital modes (FT8/FT4); played by the `.generated` timer branch.
     private var generatedTxBuffer: [Int16] = []
     private var generatedTxBufferPos: Int = 0
+
+    // FreeDV
+    private let freedvEngine = FreeDVEngine()
+    private var freedvLanRxPipeline: FreeDVLanRxPipeline?
+    private var freedvLanTxPipeline: FreeDVLanTxPipeline?
+    private var freedvUsbPipeline: FreeDVUsbPipeline?
+    private var previousModeBeforeFreeDV: KenwoodCAT.OperatingMode?
+
     private var currentHost: String = ""
     private var currentSerialPort: String = ""
-    private var cancellables: Set<AnyCancellable> = []
     private let lanRxTapQueue = DispatchQueue(label: "KenwoodLanAudio.tap")
 
     // Optional tap for consumers (FT8, recording, etc). Called off the main thread.
@@ -202,6 +377,9 @@ final class RadioState: ObservableObject {
     private let lanAudioOutputUIDKey = "lan_audio_output_uid"
     private let lanMicInputUIDKey    = "lan_mic_input_uid"
     private let audioInputUIDKey     = "audio_input_uid"
+    private let txAudioSourceKey     = "tx_audio_source"
+    private let txMicInputUIDKey     = "tx_mic_input_uid"
+    private let txCodecOutputUIDKey  = "tx_codec_output_uid"
     // Cache the most recently loaded/saved credentials so we don't touch Keychain on every connect.
     // Keyed by "\(accountTypeRaw)|\(host)".
     private var knsCredentialCache: [String: (username: String, password: String)] = [:]
@@ -238,6 +416,7 @@ final class RadioState: ObservableObject {
 
         loadPersistedKnsSettings()
         loadPersistedNoiseReductionSettings()
+        loadPersistedFilterSlotSettings()
         // Apply initial strength to both paths (LAN + monitor).
         setNoiseReductionStrength(noiseReductionStrength, persist: false)
         // Apply profile after strength so preset can override if user chose it.
@@ -275,47 +454,46 @@ final class RadioState: ObservableObject {
             selectedLanMicInputUID = saved
         }
 
-        // Wire connection callbacks to update published state on main thread
+        // Restore TX audio source and device selections.
+        if let rawSource = UserDefaults.standard.string(forKey: txAudioSourceKey),
+           let saved = TXAudioSource(rawValue: rawSource) {
+            txAudioSource = saved
+        }
+        if let saved = UserDefaults.standard.string(forKey: txMicInputUIDKey), !saved.isEmpty,
+           audioInputDevices.contains(where: { $0.uid == saved }) {
+            selectedTXMicInputUID = saved
+        }
+        if let saved = UserDefaults.standard.string(forKey: txCodecOutputUIDKey), !saved.isEmpty,
+           audioOutputDevices.contains(where: { $0.uid == saved }) {
+            selectedTXCodecOutputUID = saved
+        }
+
+        // Restore saved FreeDV mode and audio path.
+        if let rawMode = UserDefaults.standard.object(forKey: "freedv_mode") as? Int,
+           let savedMode = FreeDVEngine.Mode(rawValue: Int32(rawMode)) {
+            freedvMode = savedMode
+        }
+        if let rawPath = UserDefaults.standard.string(forKey: "freedv_audio_path"),
+           let savedPath = FreeDVAudioPath(rawValue: rawPath) {
+            freedvAudioPath = savedPath
+        }
+
         wireCallbacks()
-
-        // Switching output devices must take effect immediately, not only on the next start.
-        $selectedLanAudioOutputUID
-            .removeDuplicates()
-            .dropFirst()
-            .sink { [weak self] uid in
-                guard let self else { return }
-                UserDefaults.standard.set(uid, forKey: self.lanAudioOutputUIDKey)
-                self.switchLanAudioOutputIfRunning()
-            }
-            .store(in: &cancellables)
-
-        // Persist audio input selections whenever they change.
-        $selectedLanMicInputUID
-            .removeDuplicates()
-            .dropFirst()
-            .sink { [weak self] uid in
-                guard let self else { return }
-                UserDefaults.standard.set(uid, forKey: self.lanMicInputUIDKey)
-            }
-            .store(in: &cancellables)
-
-        $selectedAudioInputUID
-            .removeDuplicates()
-            .dropFirst()
-            .sink { [weak self] uid in
-                guard let self else { return }
-                UserDefaults.standard.set(uid, forKey: self.audioInputUIDKey)
-            }
-            .store(in: &cancellables)
-
-        $cwGreetingEnabled
-            .removeDuplicates()
-            .dropFirst()
-            .sink { enabled in
-                UserDefaults.standard.set(enabled, forKey: "CWGreetingEnabled")
-            }
-            .store(in: &cancellables)
     }
+
+    // MARK: - Frame-drain state
+    // Batches incoming CAT frames so we dispatch to main at most once per RunLoop
+    // tick instead of once per frame. Prevents keyboard events from queuing behind
+    // a flood of individual DispatchQueue.main.async calls (AI4 + scope streaming).
+    private var _pendingFrames: [String] = []
+    private let _pendingLock = NSLock()
+    private var _drainScheduled = false
+    private var _discoverySource: DispatchSourceTimer?
+
+    // Scope coalescing — only the latest ##DD2 frame per RunLoop tick reaches main.
+    private var _latestScopePoints: [UInt8]? = nil
+    private var _scopeDrainScheduled = false
+    private let _scopeLock = NSLock()
 
     // MARK: - Transport wiring
 
@@ -353,7 +531,7 @@ final class RadioState: ObservableObject {
                             )
                         }
 
-                        if self.autoStartLanAudio, !self.currentHost.isEmpty {
+                        if self.capabilities.hasLANAudio, self.autoStartLanAudio, !self.currentHost.isEmpty {
                             if self.isLanAudioRunning {
                                 AppFileLogger.shared.log("LAN: reconnect — reusing existing receiver, sending ##VP1")
                                 self.connection.send("##VP1;")
@@ -364,10 +542,19 @@ final class RadioState: ObservableObject {
                             self.send(KenwoodCAT.getVoipOutputLevel())
                         }
                     }
+                    // Enable Auto-Information mode: radio pushes FA/FB/OM/RIT/XIT/etc.
+                    // changes unsolicited, eliminating the need to poll those values.
+                    // AI4 = auto-info ON with backup (survives KNS reconnects).
+                    self.send("AI4;")
                     // Prime basic audio/rf controls and common operating params.
                     self.send(KenwoodCAT.getAFGain())
                     self.send(KenwoodCAT.getRFGain())
                     self.queryTop5()
+                    // Enable bandscope streaming to LAN (high cycle) and read span
+                    if self.connectionType == .lan && self.capabilities.hasScope {
+                        self.send("DD01;")   // Output to LAN, High cycle
+                        self.send("BS4;")    // Read current span setting
+                    }
                     if self.cwGreetingEnabled {
                         AppFileLogger.shared.log("Morse: playing connect greeting (CQ)")
                         self.morsePlayer.play("CQ")
@@ -375,6 +562,7 @@ final class RadioState: ObservableObject {
                 }
                 if mapped == .disconnected {
                     if self.connectionType == .lan { self.stopMicCapture() }
+                    self.deactivateFreeDV()
                     // Keep the UDP receiver alive so port 60001 stays bound.
                     self.isPTTDown = false
                 }
@@ -384,25 +572,61 @@ final class RadioState: ObservableObject {
             AppLogger.error(err)
             AppFileLogger.shared.log("Error: \(err)")
             DispatchQueue.main.async {
-                self?.lastError = err
-                self?.errorLog.append(err)
+                DiagnosticsStore.shared.lastError = err
+                DiagnosticsStore.shared.errorLog.append(err)
                 self?.connectionLog.append("Error: \(err)")
                 self?.announceError(err)
             }
         }
         connection.onFrame = { [weak self] frame in
-            DispatchQueue.main.async {
+            guard let self else { return }
+            // Drain pattern: enqueue on background, dispatch to main only on first item.
+            // All frames queued before the drain runs are handled in a single RunLoop tick,
+            // so keyboard events are never blocked by a flood of individual async calls.
+            self._pendingLock.lock()
+            self._pendingFrames.append(frame)
+            let needsDrain = !self._drainScheduled
+            if needsDrain { self._drainScheduled = true }
+            self._pendingLock.unlock()
+            if needsDrain {
+                DispatchQueue.main.async { [weak self] in self?._drainFrames() }
+            }
+        }
+        // Wire scope data — LAN only; no-op for serial transport.
+        // Coalescing: if multiple ##DD2 frames arrive before main drains, only the
+        // latest is applied — avoids saturating the main RunLoop with scope data.
+        if let lan = connection as? TS890Connection {
+            lan.onScopeData = { [weak self] points in
                 guard let self else { return }
-                self.handleFrame(frame)
-                if self.shouldPublishLastRXFrame(frame) {
-                    self.lastRXFrame = frame
+                self._scopeLock.lock()
+                self._latestScopePoints = points
+                let needsDrain = !self._scopeDrainScheduled
+                if needsDrain { self._scopeDrainScheduled = true }
+                self._scopeLock.unlock()
+                if needsDrain {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self._scopeLock.lock()
+                        let pts = self._latestScopePoints
+                        self._latestScopePoints = nil
+                        self._scopeDrainScheduled = false
+                        self._scopeLock.unlock()
+                        if let pts { ScopeStore.shared.points = pts }
+                    }
                 }
             }
         }
         connection.onLog = { [weak self] message in
-            if message.hasPrefix("RX: SM") { return }
-            AppLogger.info(message)
+            // High-frequency push frames (FA/FB during tuning, SM, ##DD2 scope) are
+            // already written to AppFileLogger. Skip them from the @Published connectionLog
+            // — every append fires objectWillChange and re-renders ContentView's log panel.
+            let isHighFreq = message.hasPrefix("RX: SM")
+                          || message.hasPrefix("RX: FA")
+                          || message.hasPrefix("RX: FB")
+                          || message.hasPrefix("RX: ##DD")
             AppFileLogger.shared.log(message)
+            guard !isHighFreq else { return }
+            AppLogger.info(message)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.connectionLog.append(message)
@@ -411,6 +635,59 @@ final class RadioState: ObservableObject {
                 }
             }
         }
+    }
+
+    // MARK: - Frame drain (called on main thread)
+
+    private func _drainFrames() {
+        _pendingLock.lock()
+        let frames = _pendingFrames
+        _pendingFrames.removeAll(keepingCapacity: true)
+        _drainScheduled = false
+        _pendingLock.unlock()
+        // Deduplicate before processing: during AI4 operation and VFO tuning, dozens of
+        // FA/FB frames can pile up between drain cycles. Only the latest value matters;
+        // skipping stale duplicates cuts main-thread parse work and reduces SwiftUI
+        // re-render pressure across all open windows.
+        let deduped = Self._deduplicateFrames(frames)
+        for frame in deduped {
+            handleFrame(frame)
+            if shouldPublishLastRXFrame(frame) {
+                DiagnosticsStore.shared.lastRXFrame = frame
+            }
+        }
+    }
+
+    /// Returns `frames` with duplicate high-frequency frames removed, keeping only
+    /// the last occurrence of each key. Frame order is preserved for all other types.
+    private static func _deduplicateFrames(_ frames: [String]) -> [String] {
+        // First pass: find the last index of each dedup key.
+        var lastIndex: [String: Int] = [:]
+        for (i, frame) in frames.enumerated() {
+            if let key = _dedupKey(frame) { lastIndex[key] = i }
+        }
+        guard !lastIndex.isEmpty else { return frames }
+        // Second pass: emit each frame unless a newer one with the same key exists.
+        var result: [String] = []
+        result.reserveCapacity(frames.count)
+        for (i, frame) in frames.enumerated() {
+            if let key = _dedupKey(frame) {
+                if lastIndex[key] == i { result.append(frame) }
+            } else {
+                result.append(frame)
+            }
+        }
+        return result
+    }
+
+    /// Returns a dedup key for high-frequency frame types, nil for everything else.
+    /// FA/FB: VFO frequency pushed by AI4 on every encoder tick.
+    /// SM*:   meter readings (SM0–SM5) polled at ~4 Hz.
+    private static func _dedupKey(_ frame: String) -> String? {
+        if frame.hasPrefix("FA") { return "FA" }
+        if frame.hasPrefix("FB") { return "FB" }
+        if frame.hasPrefix("SM"), frame.count >= 3 { return String(frame.prefix(3)) }
+        return nil
     }
 
     // MARK: - Serial port discovery
@@ -450,7 +727,7 @@ final class RadioState: ObservableObject {
         persistKnsSettings(host: host, port: port, accountType: type)
         connectionType = .lan
         currentHost = host
-        lastError = nil
+        DiagnosticsStore.shared.lastError = nil
         let lan = TS890Connection()
         connection = lan
         wireCallbacks()
@@ -461,7 +738,7 @@ final class RadioState: ObservableObject {
     func connectUSB(portPath: String) {
         connectionType = .usb
         currentSerialPort = portPath
-        lastError = nil
+        DiagnosticsStore.shared.lastError = nil
         let serial = SerialCATConnection()
         connection = serial
         wireCallbacks()
@@ -503,7 +780,9 @@ final class RadioState: ObservableObject {
 
     func send(_ command: String) {
         // Don't surface admin credentials in the UI.
-        lastTXFrame = command.hasPrefix("##ID") ? "##ID<redacted>;" : command
+        let display = command.hasPrefix("##ID") ? "##ID<redacted>;" : command
+        DiagnosticsStore.shared.lastTXFrame = display
+        DiagnosticsStore.shared.txLog.append(display)
         connection.send(command)
     }
 
@@ -518,27 +797,32 @@ final class RadioState: ObservableObject {
     func setNoiseReductionBackend(_ backendName: String) {
         selectedNoiseReductionBackend = backendName
         persistNoiseReductionSettings()
+        // Preserve the user's current on/off state across backend switches.
+        // New processors always start with isEnabled=false; we restore the
+        // previous state so NR doesn't silently turn off when switching modes.
+        let wasEnabled = isNoiseReductionEnabled
         switch backendName {
         case "WDSP EMNR":
             if let emnr = WDSPNoiseReductionProcessor(mode: .emnr) {
+                emnr.isEnabled = wasEnabled
                 noiseProcessor = emnr
-                isNoiseReductionEnabled = emnr.isEnabled
                 noiseReductionBackend = "WDSP EMNR"
-                AppFileLogger.shared.log("NR backend switched to: WDSP EMNR")
+                AppFileLogger.shared.log("NR backend switched to: WDSP EMNR (enabled=\(wasEnabled))")
             }
         case "WDSP ANR":
             if let anr = WDSPNoiseReductionProcessor(mode: .anr) {
+                anr.isEnabled = wasEnabled
                 noiseProcessor = anr
-                isNoiseReductionEnabled = anr.isEnabled
                 noiseReductionBackend = "WDSP ANR"
-                AppFileLogger.shared.log("NR backend switched to: WDSP ANR")
+                AppFileLogger.shared.log("NR backend switched to: WDSP ANR (enabled=\(wasEnabled))")
             }
         case "RNNoise (in-process)":
             if let rnnoise = RNNoiseProcessor() {
+                rnnoise.isEnabled = wasEnabled
                 noiseProcessor = rnnoise
-                isNoiseReductionEnabled = rnnoise.isEnabled
+                isNoiseReductionEnabled = wasEnabled
                 noiseReductionBackend = rnnoise.backendDescription
-                AppFileLogger.shared.log("NR backend switched to: RNNoise (in-process)")
+                AppFileLogger.shared.log("NR backend switched to: RNNoise (in-process) (enabled=\(wasEnabled))")
             }
         default: // "Passthrough (disabled)"
             noiseProcessor = PassthroughNoiseReduction()
@@ -596,6 +880,8 @@ final class RadioState: ObservableObject {
     // MARK: - Top-5 Operating Features
 
     func queryTop5() {
+        // Identify the radio model so capability flags are set before we use them.
+        send("ID;")
         // VFO A (also pushed by AI, but query on connect for instant population).
         send(KenwoodCAT.getVFOAFrequency())
         // VFO B + split (FR/FT), RIT/XIT, RX filter, power, ATU.
@@ -608,6 +894,9 @@ final class RadioState: ObservableObject {
         send(KenwoodCAT.getReceiveFilterShift())
         send(KenwoodCAT.getReceiveFilterLowCutSettingID())
         send(KenwoodCAT.getReceiveFilterHighCutSettingID())
+        send(KenwoodCAT.getFilterSlot())
+        send("TF1;")
+        send("TF2;")
         send(KenwoodCAT.getOutputPower())
         send(KenwoodCAT.getAntennaTuner())
         send(KenwoodCAT.getSplitOffsetSettingState())
@@ -636,7 +925,7 @@ final class RadioState: ObservableObject {
 
     func setVFOBFrequencyHz(_ hz: Int) {
         send(KenwoodCAT.setVFOBFrequencyHz(hz))
-        send(KenwoodCAT.getVFOBFrequency())
+        // AI4 pushes FB confirmation automatically
     }
 
     func setSplitEnabled(_ enabled: Bool) {
@@ -645,46 +934,45 @@ final class RadioState: ObservableObject {
         if enabled {
             let tx: KenwoodCAT.VFO = (rx == .a) ? .b : .a
             send(KenwoodCAT.setTransmitterVFO(tx))
-            send(KenwoodCAT.getTransmitterVFO())
         } else {
             send(KenwoodCAT.setTransmitterVFO(rx))
-            send(KenwoodCAT.getTransmitterVFO())
         }
+        // AI4 pushes FT confirmation automatically
     }
 
     func setReceiverVFO(_ vfo: KenwoodCAT.VFO) {
         send(KenwoodCAT.setReceiverVFO(vfo))
-        send(KenwoodCAT.getReceiverVFO())
+        // AI4 pushes FR confirmation automatically
     }
 
     func setTransmitterVFO(_ vfo: KenwoodCAT.VFO) {
         send(KenwoodCAT.setTransmitterVFO(vfo))
-        send(KenwoodCAT.getTransmitterVFO())
+        // AI4 pushes FT confirmation automatically
     }
 
     func setRITEnabled(_ enabled: Bool) {
         send(KenwoodCAT.ritSetEnabled(enabled))
-        send(KenwoodCAT.ritGetState())
+        // AI4 pushes RT confirmation automatically
     }
 
     func setXITEnabled(_ enabled: Bool) {
         send(KenwoodCAT.xitSetEnabled(enabled))
-        send(KenwoodCAT.xitGetState())
+        // AI4 pushes XT confirmation automatically
     }
 
     func clearRitXitOffset() {
         send(KenwoodCAT.ritXitClearOffset())
-        send(KenwoodCAT.ritXitGetOffset())
+        // AI4 pushes RD confirmation automatically
     }
 
     func setRitXitOffsetHz(_ hz: Int) {
         send(KenwoodCAT.ritXitSetOffsetHz(hz))
-        send(KenwoodCAT.ritXitGetOffset())
+        // AI4 pushes RD confirmation automatically
     }
 
     func stepRitXit(up: Bool) {
         send(up ? KenwoodCAT.ritXitStepUp() : KenwoodCAT.ritXitStepDown())
-        send(KenwoodCAT.ritXitGetOffset())
+        // AI4 pushes RD confirmation automatically
     }
 
     func setReceiveFilterShiftHz(_ hz: Int) {
@@ -713,7 +1001,7 @@ final class RadioState: ObservableObject {
 
     func setOutputPowerWatts(_ watts: Int) {
         send(KenwoodCAT.setOutputPowerWatts(watts))
-        send(KenwoodCAT.getOutputPower())
+        // AI4 pushes PC confirmation automatically
     }
 
     func setOutputPowerWattsDebounced(_ watts: Int) {
@@ -722,13 +1010,13 @@ final class RadioState: ObservableObject {
         debounceCAT(key: "tx_power", delaySeconds: 0.20) { [weak self] in
             guard let self else { return }
             self.send(KenwoodCAT.setOutputPowerWatts(clamped))
-            self.send(KenwoodCAT.getOutputPower())
+            // AI4 pushes PC confirmation automatically
         }
     }
 
     func setATUTxEnabled(_ enabled: Bool) {
         send(KenwoodCAT.setAntennaTuner(txEnabled: enabled))
-        send(KenwoodCAT.getAntennaTuner())
+        // AI4 pushes AC confirmation automatically
     }
 
     func setMemoryMode(enabled: Bool) {
@@ -736,6 +1024,18 @@ final class RadioState: ObservableObject {
         send(KenwoodCAT.setMemoryMode(enabled))
         send(KenwoodCAT.getMemoryMode())
         send(KenwoodCAT.getMemoryChannelNumber())
+    }
+
+    /// Start memory scan (SC1;). Radio advances through memory channels automatically.
+    func startMemoryScan() {
+        scanActive = true   // optimistic — corrected by SC response frame
+        send("SC1;")
+    }
+
+    /// Stop any active scan (SC0;).
+    func stopScan() {
+        scanActive = false
+        send("SC0;")
     }
 
     func recallMemoryChannel(_ channel: Int) {
@@ -866,6 +1166,78 @@ final class RadioState: ObservableObject {
         isAudioMonitorRunning = false
     }
 
+    // MARK: - TX Audio Passthrough (USB mic → USB Codec)
+
+    func setTXAudioSource(_ source: TXAudioSource) {
+        txAudioSource = source
+        UserDefaults.standard.set(source.rawValue, forKey: txAudioSourceKey)
+        switch source {
+        case .hardware:
+            stopTXPassthrough()
+            send("MS001;")
+        case .usbPassthrough:
+            send("MS002;")
+            startTXPassthrough()
+        }
+    }
+
+    func startTXPassthrough() {
+        stopTXPassthrough()
+        guard txAudioSource == .usbPassthrough else { return }
+
+        // Require explicit device selections — do not fall back to system defaults.
+        // Accidentally routing the wrong mic to the radio transmitter would be harmful.
+        guard !selectedTXMicInputUID.isEmpty else {
+            txPassthroughError = "Select a microphone input device for TX"
+            return
+        }
+        guard !selectedTXCodecOutputUID.isEmpty else {
+            txPassthroughError = "Select the TS-890S USB Codec output device for TX"
+            return
+        }
+
+        guard let inputID = AudioDeviceManager.deviceID(forUID: selectedTXMicInputUID) else {
+            txPassthroughError = "Selected TX mic device is no longer available"
+            return
+        }
+        guard let outputID = AudioDeviceManager.deviceID(forUID: selectedTXCodecOutputUID) else {
+            txPassthroughError = "Selected USB Codec output device is no longer available"
+            return
+        }
+
+        let pt = AudioPassthrough()
+        pt.inputGain = Float(txPassthroughInputGain)
+        pt.onLog = { [weak self] msg in
+            DispatchQueue.main.async {
+                self?.audioMonitorLog.append(msg)
+                if (self?.audioMonitorLog.count ?? 0) > 50 {
+                    self?.audioMonitorLog.removeFirst((self?.audioMonitorLog.count ?? 0) - 50)
+                }
+            }
+        }
+        pt.onError = { [weak self] msg in
+            DispatchQueue.main.async {
+                self?.txPassthroughError = msg
+                self?.isTXPassthroughRunning = false
+            }
+        }
+        do {
+            try pt.start(inputDeviceID: inputID, outputDeviceID: outputID)
+            txPassthrough = pt
+            isTXPassthroughRunning = true
+            txPassthroughError = nil
+        } catch {
+            txPassthroughError = error.localizedDescription
+            isTXPassthroughRunning = false
+        }
+    }
+
+    func stopTXPassthrough() {
+        txPassthrough?.stop()
+        txPassthrough = nil
+        isTXPassthroughRunning = false
+    }
+
     /// Configures the radio for WSJT-X / digital mode.
     /// Saves the current operating mode, then sends OM0D (USB-DATA) + MS002 (Rear=USB Audio).
     func configureForDigitalMode() {
@@ -893,6 +1265,138 @@ final class RadioState: ObservableObject {
             title: "Radio Reverted to Voice Mode",
             body: "TS-890S restored to \(revertMode.label) with microphone input."
         )
+    }
+
+    // MARK: - FreeDV activation
+
+    func activateFreeDV(mode: FreeDVEngine.Mode, audioPath: FreeDVAudioPath) {
+        guard !freedvIsActive else { return }
+
+        // Save the current mode so we can restore it on deactivate.
+        previousModeBeforeFreeDV = operatingMode
+
+        // Switch radio to USB-DATA.
+        send("OM0D;")
+
+        // Open the codec2 FreeDV engine.
+        freedvEngine.open(mode: mode)
+        freedvEngine.txCallsign = freedvTxCallsign
+        freedvEngine.onStatsUpdate = { [weak self] sync, snr, ber, tb, tbe, status in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let wasSync = self.freedvSync
+                self.freedvSync            = sync
+                self.freedvSnrDB           = snr
+                self.freedvBer             = ber
+                self.freedvTotalBits       = tb
+                self.freedvTotalBitErrors  = tbe
+                self.freedvRxStatus        = status
+                if sync && !wasSync {
+                    self.announceInfo("FreeDV synchronized, SNR \(Int(snr)) dB")
+                } else if !sync && wasSync {
+                    self.announceInfo("FreeDV sync lost")
+                }
+            }
+        }
+        freedvEngine.onTextReceived = { [weak self] char in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.freedvReceivedText.append(char)
+                if self.freedvReceivedText.count > 500 {
+                    self.freedvReceivedText = String(self.freedvReceivedText.suffix(500))
+                }
+            }
+        }
+
+        if audioPath == .lan {
+            // LAN (KNS) audio path.
+            send("MS003;") // Rear = LAN (KNS audio carries modem tones)
+
+            let rxPipe = FreeDVLanRxPipeline(engine: freedvEngine)
+            rxPipe.onAudio48kMono = { [weak self] samples in
+                self?.lanPlayer?.enqueue48kMono(samples)
+            }
+            freedvLanRxPipeline = rxPipe
+
+            // Ensure LAN audio is running first (receiver must exist before wiring TX).
+            if !isLanAudioRunning && !currentHost.isEmpty {
+                startLanAudio(host: currentHost)
+            }
+
+            if let receiver = lanReceiver {
+                let txPipe = FreeDVLanTxPipeline(engine: freedvEngine, receiver: receiver)
+                txPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV TX: \(msg)") }
+                txPipe.onError = { [weak self] msg in
+                    DispatchQueue.main.async { self?.freedvError = msg }
+                }
+                freedvLanTxPipeline = txPipe
+            }
+
+        } else {
+            // USB AUDIO CODEC path.
+            send("MS002;") // Rear = USB audio codec
+
+            // Find the TS-890S USB AUDIO CODEC by name (partial, case-insensitive).
+            let usbInfo = AudioDeviceManager.inputDevices()
+                .first { $0.name.localizedCaseInsensitiveContains("USB Audio CODEC") }
+            guard let usbID = usbInfo.map(\.id) else {
+                freedvError = "USB Audio CODEC device not found — connect TS-890S USB cable"
+                freedvEngine.close()
+                return
+            }
+            let speakerID = AudioDeviceManager.defaultOutputDeviceID() ?? AudioDeviceID(kAudioObjectSystemObject)
+
+            let usbPipe = FreeDVUsbPipeline(engine: freedvEngine)
+            usbPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV USB: \(msg)") }
+            usbPipe.onError = { [weak self] msg in
+                DispatchQueue.main.async { self?.freedvError = msg }
+            }
+            do {
+                try usbPipe.start(usbDeviceID: usbID, speakerDeviceID: speakerID)
+                freedvUsbPipeline = usbPipe
+            } catch {
+                freedvError = "FreeDV USB pipeline: \(error.localizedDescription)"
+                freedvEngine.close()
+                return
+            }
+        }
+
+        freedvMode      = mode
+        freedvAudioPath = audioPath
+        freedvIsActive  = true
+        freedvError     = nil
+        UserDefaults.standard.set(mode.rawValue, forKey: "freedv_mode")
+        UserDefaults.standard.set(audioPath.rawValue, forKey: "freedv_audio_path")
+        AppFileLogger.shared.log("FreeDV: activated mode=\(mode.label) path=\(audioPath.rawValue)")
+    }
+
+    func deactivateFreeDV() {
+        guard freedvIsActive else { return }
+
+        // Stop TX if in progress.
+        if isPTTDown { setPTT(down: false) }
+
+        freedvLanTxPipeline?.stop()
+        freedvLanTxPipeline = nil
+        freedvLanRxPipeline = nil   // just a callback wrapper — no stop needed
+        freedvUsbPipeline?.stop()
+        freedvUsbPipeline   = nil
+        freedvEngine.close()
+
+        // Restore previous radio mode and mic routing.
+        let revertMode = previousModeBeforeFreeDV ?? .usb
+        send(KenwoodCAT.setOperatingMode(revertMode))
+        send("MS001;") // Front = Microphone
+        previousModeBeforeFreeDV = nil
+
+        freedvIsActive        = false
+        freedvSync            = false
+        freedvSnrDB           = 0
+        freedvBer             = 0
+        freedvTotalBits       = 0
+        freedvTotalBitErrors  = 0
+        freedvRxStatus        = 0
+        AppFileLogger.shared.log("FreeDV: deactivated, restored \(revertMode.label)")
     }
 
     private func postRadioNotification(title: String, body: String) {
@@ -995,16 +1499,22 @@ final class RadioState: ObservableObject {
             }
         }
         receiver.onAudio48kMono = { [weak self] samples in
-            if let tap = self?.onLanRxAudio48kMono {
+            guard let self else { return }
+            if let tap = onLanRxAudio48kMono {
                 // Copy the frame to decouple from any internal buffers.
                 let frame = samples
-                self?.lanRxTapQueue.async {
-                    tap(frame)
-                }
+                lanRxTapQueue.async { tap(frame) }
             }
-            pipeline.process48kMono(samples) { outFrame in
+            // When FreeDV LAN is active, decoded speech is enqueued by the RX pipeline.
+            // Do not pass raw modem tones through the NR pipeline.
+            if freedvIsActive && freedvAudioPath == .lan { return }
+            pipeline.process48kMono(samples) { [weak self] outFrame in
                 self?.lanPlayer?.enqueue48kMono(outFrame)
             }
+        }
+        receiver.onModemSamplesInt16 = { [weak self] samples in
+            guard let self, freedvIsActive && freedvAudioPath == .lan else { return }
+            freedvLanRxPipeline?.feed16kSamples(samples)
         }
 
         do {
@@ -1022,6 +1532,14 @@ final class RadioState: ObservableObject {
         lanPipeline = pipeline
         lanReceiver = receiver
         isLanAudioRunning = true
+
+        // If FreeDV LAN was activated before LAN audio was started, wire the TX pipeline now.
+        if freedvIsActive && freedvAudioPath == .lan && freedvLanTxPipeline == nil {
+            let txPipe = FreeDVLanTxPipeline(engine: freedvEngine, receiver: receiver)
+            txPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV TX: \(msg)") }
+            txPipe.onError = { [weak self] msg in DispatchQueue.main.async { self?.freedvError = msg } }
+            freedvLanTxPipeline = txPipe
+        }
 
         AppFileLogger.shared.log("LAN: output device uid=\(selectedLanAudioOutputUID.isEmpty ? "(default)" : selectedLanAudioOutputUID)")
 
@@ -1130,11 +1648,21 @@ final class RadioState: ObservableObject {
         d.set(selectedNoiseReductionBackend, forKey: nrBackendKey)
     }
 
+    private func loadPersistedFilterSlotSettings() {
+        let d = UserDefaults.standard
+        if let raw = d.array(forKey: "filterSlotDisplayModes") as? [String], raw.count == 3 {
+            filterSlotDisplayModes = raw.map { FilterSlotDisplayMode(rawValue: $0) ?? .hiLoCut }
+        }
+        if let saved = d.array(forKey: "filterSlotIFShiftHz") as? [Int], saved.count == 3 {
+            filterSlotIFShiftHz = saved
+        }
+    }
+
     func runSmokeTest() {
         smokeTestStatus = "Running"
         announceInfo("Smoke test started")
-        lastTXFrame = "SMOKE: TX"
-        lastRXFrame = "SMOKE: RX"
+        DiagnosticsStore.shared.lastTXFrame = "SMOKE: TX"
+        DiagnosticsStore.shared.lastRXFrame = "SMOKE: RX"
         smokeTestStatus = "Complete"
         announceInfo("Smoke test complete")
     }
@@ -1173,11 +1701,25 @@ final class RadioState: ObservableObject {
         }
 
         if core.hasPrefix("OM"), core.count >= 4 {
-            // Format: OM + P1 + P2
+            // Format: OM + P1 + P2 (P2 is a single hex digit: 1-9, A-F)
             let params = core.dropFirst(2)
-            let modeDigit = params.dropFirst().prefix(1)
-            if let raw = Int(modeDigit), let mode = KenwoodCAT.OperatingMode(rawValue: raw) {
+            let modeChar = String(params.dropFirst().prefix(1))
+            if let raw = Int(modeChar, radix: 16), let mode = KenwoodCAT.OperatingMode(rawValue: raw) {
                 operatingMode = mode
+            }
+            return
+        }
+
+        if core.hasPrefix("ID"), core.count >= 5 {
+            let newModel = KenwoodRadioModel(idResponse: core)
+            if newModel != radioModel {
+                radioModel = newModel
+                capabilities = KenwoodCapabilities.capabilities(for: newModel)
+                AppFileLogger.shared.log("Radio identified: \(newModel) (\(newModel.description))")
+                if !capabilities.hasLANAudio && isLanAudioRunning {
+                    AppFileLogger.shared.log("LAN Audio: stopping — \(newModel) does not support LAN audio streaming")
+                    stopLanAudio()
+                }
             }
             return
         }
@@ -1185,6 +1727,14 @@ final class RadioState: ObservableObject {
         if core.hasPrefix("MD") {
             let digits = core.dropFirst(2).prefix { $0.isNumber }
             if let v = Int(digits) { mdMode = v }
+            return
+        }
+
+        if core.hasPrefix("BS4"), core.count >= 4 {
+            let spanTable = [5, 10, 25, 50, 100, 200, 500]
+            if let code = Int(core.dropFirst(3).prefix(1)), code < spanTable.count {
+                scopeSpanKHz = spanTable[code]
+            }
             return
         }
 
@@ -1282,6 +1832,30 @@ final class RadioState: ObservableObject {
             return
         }
 
+        if core.hasPrefix("TF1"), core.count >= 4 {
+            if let id = Int(core.dropFirst(3).prefix(1)) {
+                txFilterLowCutID = id
+            }
+            return
+        }
+
+        // FL P1 P2; — filter slot for display area P1 (we use P1=0, main VFO).
+        // Response: FL0n; where n=0(A),1(B),2(C).
+        if core.hasPrefix("FL0"), core.count >= 4 {
+            if let id = Int(core.dropFirst(3).prefix(1)),
+               let slot = KenwoodCAT.FilterSlot(rawValue: id) {
+                filterSlot = slot
+            }
+            return
+        }
+
+        if core.hasPrefix("TF2"), core.count >= 4 {
+            if let id = Int(core.dropFirst(3).prefix(1)) {
+                txFilterHighCutID = id
+            }
+            return
+        }
+
         if core.hasPrefix("PC") {
             let digits = core.dropFirst(2).prefix { $0.isNumber }
             if let w = Int(digits) { outputPowerWatts = w }
@@ -1301,6 +1875,14 @@ final class RadioState: ObservableObject {
             let digits = core.dropFirst(2).prefix { $0.isNumber }
             if let ch = Int(digits) {
                 memoryChannelNumber = ch
+            }
+            return
+        }
+
+        // SC n; — scan state: 0=stopped, 1=scanning
+        if core.hasPrefix("SC"), core.count >= 3 {
+            if let v = Int(core.dropFirst(2).prefix(1)) {
+                scanActive = (v == 1)
             }
             return
         }
@@ -1384,6 +1966,109 @@ final class RadioState: ObservableObject {
             return
         }
 
+        // ##KN0 — KNS mode (0=off, 1=LAN, 2=internet)
+        if core.hasPrefix("##KN0") {
+            if let v = Int(core.dropFirst(5).prefix(1)) { knsMode = v }
+            return
+        }
+
+        // ##KN1 — admin credentials change result
+        //   failure: ##KN10 (exactly 6 chars); success: longer with new ID/PW echo
+        if core.hasPrefix("##KN1") {
+            knsAdminChangeResult = (core == "##KN10")
+                ? "Failed: current credentials were incorrect."
+                : "Admin credentials updated successfully."
+            return
+        }
+
+        // ##KN2 — VoIP enabled (0/1)
+        if core.hasPrefix("##KN2") {
+            if let v = Int(core.dropFirst(5).prefix(1)) { knsVoipEnabled = v == 1 }
+            return
+        }
+
+        // ##KN4 — VoIP jitter buffer (2-digit raw value: 04/10/25/40)
+        if core.hasPrefix("##KN4") {
+            if let v = Int(core.dropFirst(5).prefix(2)) { knsJitterBuffer = v }
+            return
+        }
+
+        // ##KN5 — speaker mute; ##KN6 — access log; ##KN7 — user remote ops
+        if core.hasPrefix("##KN5") {
+            if let v = Int(core.dropFirst(5).prefix(1)) { knsSpeakerMute = v == 1 }
+            return
+        }
+        if core.hasPrefix("##KN6") {
+            if let v = Int(core.dropFirst(5).prefix(1)) { knsAccessLog = v == 1 }
+            return
+        }
+        if core.hasPrefix("##KN7") {
+            if let v = Int(core.dropFirst(5).prefix(1)) { knsUserRemoteOps = v == 1 }
+            return
+        }
+
+        // ##KN8 — registered user count (3 digits)
+        if core.hasPrefix("##KN8") {
+            if let v = Int(core.dropFirst(5).prefix(3)) {
+                knsUserCount = v
+                if _knsLoadUsersAfterCount {
+                    _knsLoadUsersAfterCount = false
+                    for i in 0 ..< v { send(KenwoodKNS.readUser(number: i)) }
+                }
+            }
+            return
+        }
+
+        // ##KNA — user record: P1(3,num) P2(2,IDlen) P3(2,PWlen) P4(3,descLen) ID PW desc R E
+        if core.hasPrefix("##KNA") {
+            let s = core.dropFirst(5)
+            guard s.count >= 10,
+                  let number  = Int(s.prefix(3)),
+                  let idLen   = Int(s.dropFirst(3).prefix(2)),
+                  let pwLen   = Int(s.dropFirst(5).prefix(2)),
+                  let descLen = Int(s.dropFirst(7).prefix(3)) else { return }
+            let body = s.dropFirst(10)
+            guard body.count >= idLen + pwLen + descLen + 2 else { return }
+            let userID   = String(body.prefix(idLen))
+            let afterID  = body.dropFirst(idLen)
+            let pw       = String(afterID.prefix(pwLen))
+            let afterPW  = afterID.dropFirst(pwLen)
+            let desc     = String(afterPW.prefix(descLen))
+            let afterDesc = afterPW.dropFirst(descLen)
+            let rxOnly   = afterDesc.prefix(1) == "1"
+            let disabled = afterDesc.dropFirst(1).prefix(1) == "1"
+            let user = KNSUser(id: number, userID: userID, password: pw,
+                               description: desc, rxOnly: rxOnly, disabled: disabled)
+            if let idx = knsUsers.firstIndex(where: { $0.id == number }) {
+                knsUsers[idx] = user
+            } else {
+                knsUsers.append(user)
+                knsUsers.sort { $0.id < $1.id }
+            }
+            return
+        }
+
+        // ##KNC — welcome message (P1 is always a space before the text)
+        if core.hasPrefix("##KNC") {
+            let after = core.dropFirst(5)
+            knsWelcomeMessage = after.hasPrefix(" ") ? String(after.dropFirst()) : String(after)
+            return
+        }
+
+        // ##KND — session timeout (2-digit raw value 00–13)
+        if core.hasPrefix("##KND") {
+            if let v = Int(core.dropFirst(5).prefix(2)) { knsSessionTimeout = v }
+            return
+        }
+
+        // ##KNE — password change result (1 = OK, 0 = NG)
+        if core.hasPrefix("##KNE") {
+            knsPasswordChangeResult = core.dropFirst(5).prefix(1) == "1"
+                ? "Password changed successfully."
+                : "Password change failed."
+            return
+        }
+
         if core.hasPrefix("AG") {
             let digits = core.dropFirst(2).prefix { $0.isNumber }
             if let v = Int(digits) { afGain = v }
@@ -1428,30 +2113,58 @@ final class RadioState: ObservableObject {
             return
         }
 
-        if core.hasPrefix("EX"), core.count >= 6 {
-            // EX + 3-digit menu number + value (signed or unsigned)
-            let menuStr = String(core.dropFirst(2).prefix(3))
-            guard let menuNum = Int(menuStr) else { return }
-            let valueStr = String(core.dropFirst(5))
+        if core.hasPrefix("EX"), core.count >= 9 {
+            // Format: EX + P1(1) + P2(2) + P3(2) + P4(space) + P5(1+)
+            // e.g. "EX00030 005" = P1=0, P2=00, P3=30, value=5
+            // menuNumber key: P1=0 → P2*100+P3;  P1=1 → 10000+P3
+            let afterEX = core.dropFirst(2)
+            guard afterEX.count >= 6,
+                  let p1 = Int(afterEX.prefix(1)),
+                  let p2 = Int(afterEX.dropFirst(1).prefix(2)),
+                  let p3 = Int(afterEX.dropFirst(3).prefix(2)) else { return }
+            let menuNum = p1 == 0 ? p2 * 100 + p3 : 10000 + p3
+            let afterParams = afterEX.dropFirst(5)  // starts at P4
+            let rawValue = afterParams.first == " " ? afterParams.dropFirst() : Substring(afterParams)
             let value: Int
-            if valueStr.hasPrefix("+") {
-                value = Int(valueStr.dropFirst()) ?? 0
-            } else if valueStr.hasPrefix("-") {
-                value = -(Int(valueStr.dropFirst()) ?? 0)
+            if rawValue.hasPrefix("+") {
+                value = Int(rawValue.dropFirst()) ?? 0
+            } else if rawValue.hasPrefix("-") {
+                value = -(Int(rawValue.dropFirst()) ?? 0)
             } else {
-                value = Int(valueStr) ?? 0
+                value = Int(rawValue) ?? 0
             }
             // Store in general map (used by RadioMenuView)
             exMenuValues[menuNum] = value
-            // Dispatch to typed EQ properties
-            switch menuNum {
-            case 30: txEQLowGain = value
-            case 31: txEQMidGain = value
-            case 32: txEQHighGain = value
-            case 60: rxEQLowGain = value
-            case 61: rxEQMidGain = value
-            case 62: rxEQHighGain = value
-            default: break
+            if menuDiscoveryRunning { menuDiscoveryResponseCount += 1 }
+            return
+        }
+
+        // MARK: Built-in EQ band values (UT = TX, UR = RX)
+        if core.hasPrefix("UT"), core.count == 38 {
+            if let bands = KenwoodCAT.decodeBands(String(core.dropFirst(2))) {
+                txEQBands = bands
+            }
+            return
+        }
+
+        if core.hasPrefix("UR"), core.count == 38 {
+            if let bands = KenwoodCAT.decodeBands(String(core.dropFirst(2))) {
+                rxEQBands = bands
+            }
+            return
+        }
+
+        // MARK: EQ preset responses (EQT0n / EQR0n)
+        if core.hasPrefix("EQT0"), core.count == 5 {
+            if let n = Int(core.dropFirst(4)), let p = KenwoodCAT.EQPreset(rawValue: n) {
+                txEQPreset = p
+            }
+            return
+        }
+
+        if core.hasPrefix("EQR0"), core.count == 5 {
+            if let n = Int(core.dropFirst(4)), let p = KenwoodCAT.EQPreset(rawValue: n) {
+                rxEQPreset = p
             }
             return
         }
@@ -1477,11 +2190,13 @@ final class RadioState: ObservableObject {
 
         if core.hasPrefix("PA"), core.count >= 3 {
             let p1 = core.dropFirst(2).prefix(1)
-            if let raw = Int(p1) { preampEnabled = (raw == 1) }
+            if let raw = Int(p1), let level = KenwoodCAT.PreampLevel(rawValue: raw) {
+                preampLevel = level
+            }
             return
         }
 
-        if core.hasPrefix("NB"), core.count >= 3 {
+        if core.hasPrefix("NB"), core.count == 3 {
             let p1 = core.dropFirst(2).prefix(1)
             if let raw = Int(p1) { noiseBlankerEnabled = (raw == 1) }
             return
@@ -1489,7 +2204,9 @@ final class RadioState: ObservableObject {
 
         if core.hasPrefix("BC"), core.count >= 3 {
             let p1 = core.dropFirst(2).prefix(1)
-            if let raw = Int(p1) { beatCancelEnabled = (raw == 1) }
+            if let raw = Int(p1), let mode = KenwoodCAT.BeatCancelMode(rawValue: raw) {
+                beatCancelMode = mode
+            }
             return
         }
 
@@ -1578,7 +2295,13 @@ final class RadioState: ObservableObject {
             if autoStartLanAudio, !isLanAudioRunning {
                 startLanAudio(host: currentHost)
             }
-            if useMicAudio {
+            if freedvIsActive && freedvAudioPath == .lan {
+                // FreeDV TX: push modem tones over KNS UDP.
+                freedvLanTxPipeline?.start()
+            } else if freedvIsActive && freedvAudioPath == .usb {
+                // FreeDV USB: pipeline handles TX internally via AudioUnit — nothing extra needed.
+                AppFileLogger.shared.logSync("FreeDV: USB TX started")
+            } else if useMicAudio {
                 micTxSource = .mic
                 startMicCapture()
             } else {
@@ -1598,10 +2321,14 @@ final class RadioState: ObservableObject {
             announceInfo("PTT down")
         } else {
             AppFileLogger.shared.logSync("UI: PTT up")
-            generatedTxState = nil
-            generatedTxBuffer = []
-            generatedTxBufferPos = 0
-            stopMicCapture()
+            if freedvIsActive && freedvAudioPath == .lan {
+                freedvLanTxPipeline?.stop()
+            } else {
+                generatedTxState = nil
+                generatedTxBuffer = []
+                generatedTxBufferPos = 0
+                stopMicCapture()
+            }
             AppFileLogger.shared.logSync("PTT: sending RX;")
             send(KenwoodCAT.pttUp())
             isPTTDown = false
@@ -1705,13 +2432,118 @@ final class RadioState: ObservableObject {
         }
     }
 
+    // MARK: - KNS Admin
+
+    /// Query all readable KNS admin settings from the radio.
+    /// Requires administrator login for most commands; safe to call as user (non-admin answers are ignored).
+    func queryKNSAdminSettings() {
+        send(KenwoodKNS.readKNSMode())
+        send(KenwoodKNS.readVoIPEnabled())
+        send(KenwoodKNS.readVoIPJitterBuffer())
+        send(KenwoodKNS.readSpeakerMute())
+        send(KenwoodKNS.readAccessLog())
+        send(KenwoodKNS.readUserRemoteOps())
+        send(KenwoodKNS.readUserCount())
+        send(KenwoodKNS.readWelcomeMessage())
+        send(KenwoodKNS.readSessionTimeout())
+    }
+
+    func setKNSMode(_ mode: KenwoodKNS.KNSMode) {
+        knsMode = mode.rawValue
+        send(KenwoodKNS.setKNSMode(mode))
+        send(KenwoodKNS.readKNSMode())
+    }
+
+    func setKNSVoIPEnabled(_ on: Bool) {
+        knsVoipEnabled = on
+        send(KenwoodKNS.setVoIPEnabled(on))
+        send(KenwoodKNS.readVoIPEnabled())
+    }
+
+    func setKNSJitterBuffer(_ buf: KenwoodKNS.JitterBuffer) {
+        knsJitterBuffer = buf.rawValue
+        send(KenwoodKNS.setVoIPJitterBuffer(buf))
+        send(KenwoodKNS.readVoIPJitterBuffer())
+    }
+
+    func setKNSSpeakerMute(_ on: Bool) {
+        knsSpeakerMute = on
+        send(KenwoodKNS.setSpeakerMute(on))
+        send(KenwoodKNS.readSpeakerMute())
+    }
+
+    func setKNSAccessLog(_ on: Bool) {
+        knsAccessLog = on
+        send(KenwoodKNS.setAccessLog(on))
+        send(KenwoodKNS.readAccessLog())
+    }
+
+    func setKNSUserRemoteOps(_ on: Bool) {
+        knsUserRemoteOps = on
+        send(KenwoodKNS.setUserRemoteOps(on))
+        send(KenwoodKNS.readUserRemoteOps())
+    }
+
+    func setKNSSessionTimeout(_ t: KenwoodKNS.SessionTimeout) {
+        knsSessionTimeout = t.rawValue
+        send(KenwoodKNS.setSessionTimeout(t))
+        send(KenwoodKNS.readSessionTimeout())
+    }
+
+    func setKNSWelcomeMessage(_ msg: String) {
+        knsWelcomeMessage = msg
+        send(msg.isEmpty ? KenwoodKNS.clearWelcomeMessage() : KenwoodKNS.setWelcomeMessage(msg))
+    }
+
+    /// Clears the user list then queries the count; on ##KN8 response, fires ##KNA reads.
+    func loadAllKNSUsers() {
+        knsUsers = []
+        _knsLoadUsersAfterCount = true
+        send(KenwoodKNS.readUserCount())
+    }
+
+    func addKNSUser(userID: String, password: String, description: String,
+                    rxOnly: Bool, disabled: Bool) {
+        send(KenwoodKNS.addUser(userID: userID, password: password,
+                                description: description, rxOnly: rxOnly, disabled: disabled))
+        // Reload list after a brief settle — radio sends ##KN9 answer with new number.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.loadAllKNSUsers()
+        }
+    }
+
+    func editKNSUser(number: Int, userID: String, password: String,
+                     description: String, rxOnly: Bool, disabled: Bool) {
+        send(KenwoodKNS.editUser(number: number, userID: userID, password: password,
+                                 description: description, rxOnly: rxOnly, disabled: disabled))
+        send(KenwoodKNS.readUser(number: number))
+    }
+
+    func deleteKNSUser(number: Int) {
+        send(KenwoodKNS.deleteUser(number: number))
+        knsUsers.removeAll { $0.id == number }
+        send(KenwoodKNS.readUserCount())
+    }
+
+    func changeKNSAdminCredentials(currentID: String, currentPW: String,
+                                   newID: String, newPW: String) {
+        knsAdminChangeResult = ""
+        send(KenwoodKNS.changeAdminCredentials(currentID: currentID, currentPW: currentPW,
+                                               newID: newID, newPW: newPW))
+    }
+
+    func changeKNSPassword(_ newPassword: String) {
+        knsPasswordChangeResult = ""
+        send(KenwoodKNS.changePassword(newPassword))
+    }
+
     func setRFGainDebounced(_ value: Int) {
         let clamped = max(0, min(value, 255))
         rfGain = clamped
         debounceCAT(key: "rf_gain", delaySeconds: 0.15) { [weak self] in
             guard let self else { return }
             self.send(KenwoodCAT.setRFGain(clamped))
-            self.send(KenwoodCAT.getRFGain())
+            // AI4 pushes RG confirmation automatically
         }
     }
 
@@ -1721,7 +2553,7 @@ final class RadioState: ObservableObject {
         debounceCAT(key: "af_gain", delaySeconds: 0.15) { [weak self] in
             guard let self else { return }
             self.send(KenwoodCAT.setAFGain(clamped))
-            self.send(KenwoodCAT.getAFGain())
+            // AI4 pushes AG confirmation automatically
         }
     }
 
@@ -1731,7 +2563,7 @@ final class RadioState: ObservableObject {
         debounceCAT(key: "squelch", delaySeconds: 0.15) { [weak self] in
             guard let self else { return }
             self.send(KenwoodCAT.setSquelchLevel(clamped))
-            self.send(KenwoodCAT.getSquelchLevel())
+            // AI4 pushes SQ confirmation automatically
         }
     }
 
@@ -1780,7 +2612,7 @@ final class RadioState: ObservableObject {
     func setAGCMode(_ mode: KenwoodCAT.AGCMode) {
         agcMode = mode
         send(KenwoodCAT.setAGC(mode))
-        send(KenwoodCAT.getAGC())
+        // AI4 pushes GT confirmation automatically
     }
 
     func cycleAGCMode() {
@@ -1790,36 +2622,62 @@ final class RadioState: ObservableObject {
     func setAttenuatorLevel(_ level: KenwoodCAT.AttenuatorLevel) {
         attenuatorLevel = level
         send(KenwoodCAT.setAttenuator(level))
-        send(KenwoodCAT.getAttenuator())
+        // AI4 pushes RA confirmation automatically
     }
 
     func cycleAttenuatorLevel() {
         setAttenuatorLevel((attenuatorLevel ?? .off).next)
     }
 
-    func setPreampEnabled(_ enabled: Bool) {
-        preampEnabled = enabled
-        send(KenwoodCAT.setPreamp(enabled: enabled))
-        send(KenwoodCAT.getPreamp())
+    func setPreampLevel(_ level: KenwoodCAT.PreampLevel) {
+        preampLevel = level
+        send(KenwoodCAT.setPreamp(level))
+    }
+
+    func cyclePreampLevel() {
+        setPreampLevel((preampLevel ?? .off).next)
+    }
+
+    func setFilterSlot(_ slot: KenwoodCAT.FilterSlot) {
+        filterSlot = slot
+        send(KenwoodCAT.setFilterSlot(slot))
+        // If this slot uses IF-Shift mode, restore the stored IS value for it.
+        if filterSlotDisplayModes[slot.rawValue] == .ifShift {
+            let hz = filterSlotIFShiftHz[slot.rawValue]
+            rxFilterShiftHz = hz
+            send(KenwoodCAT.setReceiveFilterShiftHz(hz))
+        }
+    }
+
+    private var lastFilterSlotCycleDate: Date = .distantPast
+
+    func cycleFilterSlot() {
+        let now = Date()
+        guard now.timeIntervalSince(lastFilterSlotCycleDate) >= 0.2 else { return }
+        lastFilterSlotCycleDate = now
+        setFilterSlot((filterSlot ?? .a).next)
     }
 
     func setNoiseBlankerEnabled(_ enabled: Bool) {
         noiseBlankerEnabled = enabled
         send(KenwoodCAT.setNoiseBlanker(enabled: enabled))
-        send(KenwoodCAT.getNoiseBlanker())
+        // AI4 pushes NB confirmation automatically
     }
 
-    func setBeatCancelEnabled(_ enabled: Bool) {
-        beatCancelEnabled = enabled
-        send(KenwoodCAT.setBeatCancel(enabled: enabled))
-        send(KenwoodCAT.getBeatCancel())
+    func setBeatCancelMode(_ mode: KenwoodCAT.BeatCancelMode) {
+        beatCancelMode = mode
+        send(KenwoodCAT.setBeatCancel(mode))
+    }
+
+    func cycleBeatCancelMode() {
+        setBeatCancelMode((beatCancelMode ?? .off).next)
     }
 
     func setMicGain(_ value: Int) {
         let clamped = max(0, min(value, 100))
         micGain = clamped
         send(KenwoodCAT.setMicGain(clamped))
-        send(KenwoodCAT.getMicGain())
+        // AI4 pushes MG confirmation automatically
     }
 
     func setMicGainDebounced(_ value: Int) {
@@ -1828,21 +2686,21 @@ final class RadioState: ObservableObject {
         debounceCAT(key: "mic_gain", delaySeconds: 0.20) { [weak self] in
             guard let self else { return }
             self.send(KenwoodCAT.setMicGain(clamped))
-            self.send(KenwoodCAT.getMicGain())
+            // AI4 pushes MG confirmation automatically
         }
     }
 
     func setVOXEnabled(_ enabled: Bool) {
         voxEnabled = enabled
         send(KenwoodCAT.setVOX(enabled: enabled))
-        send(KenwoodCAT.getVOX())
+        // AI4 pushes VX confirmation automatically
     }
 
     func setMonitorLevel(_ level: Int) {
         let clamped = max(0, min(level, 100))
         monitorLevel = clamped
         send(KenwoodCAT.setMonitorLevel(clamped))
-        send(KenwoodCAT.getMonitorLevel())
+        // AI4 pushes MO confirmation automatically
     }
 
     func setMonitorLevelDebounced(_ level: Int) {
@@ -1851,21 +2709,21 @@ final class RadioState: ObservableObject {
         debounceCAT(key: "monitor_level", delaySeconds: 0.20) { [weak self] in
             guard let self else { return }
             self.send(KenwoodCAT.setMonitorLevel(clamped))
-            self.send(KenwoodCAT.getMonitorLevel())
+            // AI4 pushes MO confirmation automatically
         }
     }
 
     func setSpeechProcEnabled(_ enabled: Bool) {
         speechProcEnabled = enabled
         send(KenwoodCAT.setSpeechProc(enabled: enabled))
-        send(KenwoodCAT.getSpeechProc())
+        // AI4 pushes PL confirmation automatically
     }
 
     func setCWKeySpeedWPM(_ wpm: Int) {
         let clamped = max(4, min(wpm, 100))
         cwKeySpeedWPM = clamped
         send(KenwoodCAT.setCWSpeed(clamped))
-        send(KenwoodCAT.getCWSpeed())
+        // AI4 pushes KS confirmation automatically
     }
 
     func setCWKeySpeedWPMDebounced(_ wpm: Int) {
@@ -1874,18 +2732,37 @@ final class RadioState: ObservableObject {
         debounceCAT(key: "cw_speed", delaySeconds: 0.20) { [weak self] in
             guard let self else { return }
             self.send(KenwoodCAT.setCWSpeed(clamped))
-            self.send(KenwoodCAT.getCWSpeed())
+            // AI4 pushes KS confirmation automatically
         }
     }
 
     func setCWBreakInMode(_ mode: KenwoodCAT.CWBreakInMode) {
         cwBreakInMode = mode
         send(KenwoodCAT.setCWBreakIn(mode))
-        send(KenwoodCAT.getCWBreakIn())
+        // AI4 pushes BK confirmation automatically
     }
 
     func cycleCWBreakInMode() {
         setCWBreakInMode((cwBreakInMode ?? .off).next)
+    }
+
+    private var lastCWKeyerSendDate: Date = .distantPast
+
+    /// Send text via the radio's built-in CW keyer.
+    /// Text is trimmed to 24 characters (radio buffer limit) and uppercased.
+    /// Sends: KY {text}; — radio transmits as CW automatically.
+    func sendCWKeyer(text: String) {
+        let trimmed = String(text.trimmingCharacters(in: .whitespaces).uppercased().prefix(24))
+        guard !trimmed.isEmpty else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastCWKeyerSendDate) >= 0.2 else { return }
+        lastCWKeyerSendDate = now
+        send("KY \(trimmed);")
+    }
+
+    /// Stop the CW keyer immediately.
+    func stopCWKeyer() {
+        send("KY0;")
     }
 
     /// Poll one or more meter types. Call from a periodic timer in the UI.
@@ -1912,6 +2789,50 @@ final class RadioState: ObservableObject {
         setTransceiverNRMode(next)
     }
 
+    /// Label shown on the unified front-panel NR button.
+    var nrButtonLabel: String {
+        switch nrButtonMode {
+        case .hardware:
+            switch transceiverNRMode ?? .off {
+            case .off: return "NR: Off"
+            case .nr1: return "NR1"
+            case .nr2: return "NR2"
+            }
+        case .software:
+            switch softwareNRState {
+            case .off:  return "NR: Off"
+            case .anr:  return "ANR"
+            case .emnr: return "EMNR"
+            }
+        }
+    }
+
+    /// Whether the unified front-panel NR button should be shown as active (lit).
+    var nrButtonIsActive: Bool {
+        switch nrButtonMode {
+        case .hardware: return (transceiverNRMode ?? .off) != .off
+        case .software: return softwareNRState != .off
+        }
+    }
+
+    /// Single action for the unified front-panel NR button: cycles the appropriate path.
+    func cycleNRFrontPanel() {
+        switch nrButtonMode {
+        case .hardware:
+            cycleTransceiverNRMode()
+        case .software:
+            let next = softwareNRState.next
+            softwareNRState = next
+            setNoiseReduction(enabled: next != .off)
+            switch next {
+            case .anr:  setNoiseReductionBackend("WDSP ANR")
+            case .emnr: setNoiseReductionBackend("WDSP EMNR")
+            case .off:  break
+            }
+            announceInfo("Software NR: \(next.rawValue)")
+        }
+    }
+
     func setNotchEnabled(_ enabled: Bool) {
         isNotchEnabled = enabled
         send(KenwoodCAT.setNotch(enabled: enabled))
@@ -1924,75 +2845,35 @@ final class RadioState: ObservableObject {
         send(KenwoodCAT.getDataMode())
     }
 
-    // MARK: - EQ debounced setters
+    // MARK: - EQ commands
 
     func queryAllEQ() {
-        send(KenwoodCAT.getTXEQLow())
-        send(KenwoodCAT.getTXEQMid())
-        send(KenwoodCAT.getTXEQHigh())
-        send(KenwoodCAT.getRXEQLow())
-        send(KenwoodCAT.getRXEQMid())
-        send(KenwoodCAT.getRXEQHigh())
+        send(KenwoodCAT.getTXEQ())
+        send(KenwoodCAT.getRXEQ())
+        send(KenwoodCAT.getTXEQPreset())
+        send(KenwoodCAT.getRXEQPreset())
     }
 
-    func setTXEQLowDebounced(_ dB: Int) {
-        let v = max(-20, min(dB, 10))
-        txEQLowGain = v
-        debounceCAT(key: "tx_eq_low", delaySeconds: 0.20) { [weak self] in
-            guard let self else { return }
-            self.send(KenwoodCAT.setTXEQLow(v))
-            self.send(KenwoodCAT.getTXEQLow())
-        }
+    func setTXEQBands(_ bands: [Int]) {
+        txEQBands = bands
+        send(KenwoodCAT.setTXEQ(bands))
     }
 
-    func setTXEQMidDebounced(_ dB: Int) {
-        let v = max(-20, min(dB, 10))
-        txEQMidGain = v
-        debounceCAT(key: "tx_eq_mid", delaySeconds: 0.20) { [weak self] in
-            guard let self else { return }
-            self.send(KenwoodCAT.setTXEQMid(v))
-            self.send(KenwoodCAT.getTXEQMid())
-        }
+    func setRXEQBands(_ bands: [Int]) {
+        rxEQBands = bands
+        send(KenwoodCAT.setRXEQ(bands))
     }
 
-    func setTXEQHighDebounced(_ dB: Int) {
-        let v = max(-20, min(dB, 10))
-        txEQHighGain = v
-        debounceCAT(key: "tx_eq_high", delaySeconds: 0.20) { [weak self] in
-            guard let self else { return }
-            self.send(KenwoodCAT.setTXEQHigh(v))
-            self.send(KenwoodCAT.getTXEQHigh())
-        }
+    func loadTXEQPreset(_ preset: KenwoodCAT.EQPreset) {
+        txEQPreset = preset
+        send(KenwoodCAT.setTXEQPreset(preset))
+        send(KenwoodCAT.getTXEQ())
     }
 
-    func setRXEQLowDebounced(_ dB: Int) {
-        let v = max(-20, min(dB, 10))
-        rxEQLowGain = v
-        debounceCAT(key: "rx_eq_low", delaySeconds: 0.20) { [weak self] in
-            guard let self else { return }
-            self.send(KenwoodCAT.setRXEQLow(v))
-            self.send(KenwoodCAT.getRXEQLow())
-        }
-    }
-
-    func setRXEQMidDebounced(_ dB: Int) {
-        let v = max(-20, min(dB, 10))
-        rxEQMidGain = v
-        debounceCAT(key: "rx_eq_mid", delaySeconds: 0.20) { [weak self] in
-            guard let self else { return }
-            self.send(KenwoodCAT.setRXEQMid(v))
-            self.send(KenwoodCAT.getRXEQMid())
-        }
-    }
-
-    func setRXEQHighDebounced(_ dB: Int) {
-        let v = max(-20, min(dB, 10))
-        rxEQHighGain = v
-        debounceCAT(key: "rx_eq_high", delaySeconds: 0.20) { [weak self] in
-            guard let self else { return }
-            self.send(KenwoodCAT.setRXEQHigh(v))
-            self.send(KenwoodCAT.getRXEQHigh())
-        }
+    func loadRXEQPreset(_ preset: KenwoodCAT.EQPreset) {
+        rxEQPreset = preset
+        send(KenwoodCAT.setRXEQPreset(preset))
+        send(KenwoodCAT.getRXEQ())
     }
 
     // MARK: - General EX menu read/write
@@ -2004,6 +2885,87 @@ final class RadioState: ObservableObject {
     func writeMenuValue(_ menuNumber: Int, value: Int) {
         send(KenwoodCAT.setMenuValue(menuNumber, value: value))
         send(KenwoodCAT.getMenuValue(menuNumber))
+    }
+
+    // MARK: - EX menu discovery scan
+
+    /// Queries all valid EX menu items using the correct 5-digit P1/P2/P3 format.
+    /// Scans P1=0 (regular menu) categories 00–19, items 00–99, plus
+    /// P1=1 (Advanced Menu) items 00–27.  Total ≈ 2028 queries at 20 ms each (~41 s).
+    /// The radio silently ignores (returns ?;) queries for non-existent items;
+    /// only valid responses are stored.
+    func startMenuDiscovery() {
+        guard !menuDiscoveryRunning else { return }
+        menuDiscoveryRunning = true
+        menuDiscoveryProgress = 0
+        menuDiscoverySnapshot = []
+        menuDiscoveryResponseCount = 0
+        menuDiscoverySentCount = 0
+        exMenuValues.removeAll()
+
+        // Silence AI4 push traffic during the scan so EX responses aren't
+        // buried in FA/FB floods and the main thread stays responsive.
+        send("AI0;")
+        // Stop bandscope streaming (DD01 runs at ~30 Hz on LAN and isn't
+        // silenced by AI0 — it would drown out EX responses).
+        if connectionType == .lan { send("DD00;") }
+
+        // Build the ordered list of queries using the correct 5-digit format.
+        // Scan P2=00-29 to cover all known regular menu categories including
+        // any undocumented items well beyond the confirmed P2=00-09 range.
+        var queries: [String] = []
+        for p2 in 0...29 {
+            for p3 in 0...99 {
+                queries.append(String(format: "EX0%02d%02d;", p2, p3))
+            }
+        }
+        for p3 in 0...27 {
+            queries.append(String(format: "EX100%02d;", p3))
+        }
+
+        var index = 0
+        let total = queries.count
+        menuDiscoveryTotalCount = total
+
+        let source = DispatchSource.makeTimerSource(queue: .main)
+        // Small delay before first query to let AI0/DD00 take effect.
+        source.schedule(deadline: .now() + .milliseconds(300), repeating: .milliseconds(20))
+        _discoverySource = source
+
+        source.setEventHandler { [weak self] in
+            guard let self, self.menuDiscoveryRunning else { source.cancel(); return }
+            if index < total {
+                self.send(queries[index])
+                self.menuDiscoverySentCount = index + 1
+                self.menuDiscoveryProgress = Double(index + 1) / Double(total)
+                index += 1
+            } else {
+                source.cancel()
+                self._discoverySource = nil
+                // Allow 2 s for the last responses to arrive before snapshotting.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                    guard let self else { return }
+                    self.menuDiscoverySnapshot = self.exMenuValues
+                        .sorted { $0.key < $1.key }
+                        .map { (number: $0.key, value: $0.value) }
+                    self.menuDiscoveryRunning = false
+                    self.menuDiscoveryProgress = 1.0
+                    // Restore AI4 push traffic and bandscope streaming.
+                    self.send("AI4;")
+                    if self.connectionType == .lan { self.send("DD01;") }
+                }
+            }
+        }
+        source.resume()
+    }
+
+    func stopMenuDiscovery() {
+        _discoverySource?.cancel()
+        _discoverySource = nil
+        menuDiscoveryRunning = false
+        // Restore AI4 push traffic and bandscope streaming.
+        send("AI4;")
+        if connectionType == .lan { send("DD01;") }
     }
 
     private func startMicCapture() {

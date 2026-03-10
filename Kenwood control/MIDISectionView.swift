@@ -22,8 +22,8 @@ import CoreMIDI
 // MARK: - Main section view
 
 struct MIDISectionView: View {
-    @ObservedObject var radio: RadioState
-    @ObservedObject private var midi = MIDIController.shared
+    var radio: RadioState
+    @Bindable private var midi = MIDIController.shared
     @State private var showLearnSheet = false
     @State private var reassignMapping: MIDIMapping?   // non-nil → reassign flow
 
@@ -205,7 +205,7 @@ private struct MappingRow: View {
 // MARK: - Learn sheet
 
 struct MIDILearnSheet: View {
-    @ObservedObject var midi: MIDIController
+    @Bindable var midi: MIDIController
     /// When non-nil, saving this mapping replaces the existing one with this ID.
     let replacingID: UUID?
     @Binding var isPresented: Bool

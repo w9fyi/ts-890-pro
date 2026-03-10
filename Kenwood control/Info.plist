@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for the Local Network permission dialog to appear on macOS 14+.
+         NSLocalNetworkUsageDescription is set in build settings; this file supplies
+         the array key that cannot be expressed as an INFOPLIST_KEY_* build setting. -->
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_services._dns-sd._udp</string>
+    </array>
+</dict>
+</plist>

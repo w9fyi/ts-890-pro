@@ -27,10 +27,12 @@ WDSP_EMNR* wdsp_emnr_create(int sampleRate) {
     WDSP_EMNR *ctx = (WDSP_EMNR *)calloc(1, sizeof(WDSP_EMNR));
     if (!ctx) return NULL;
 
-    /* fsize=1920, ovrlp=4, incr=480 → bsize=480 matches LanAudioPipeline's 480-sample frames
-     * At 48kHz: 1920/48000 = 40ms window, 25Hz frequency resolution. */
-    const int fsize  = 1920;
-    const int ovrlp  = 4;
+    /* fsize=960, ovrlp=2, bsize=480 matches LanAudioPipeline/AudioMonitor 480-sample frames.
+     * Overlap-save algorithmic delay = fsize - bsize = 480 samples = 10ms at 48kHz.
+     * Previous config (fsize=1920, ovrlp=4) caused 1440-sample = 30ms audible delay.
+     * Freq resolution: 48000/960 = 50 Hz/bin — still excellent for speech NR. */
+    const int fsize  = 960;
+    const int ovrlp  = 2;
     const int bsize  = fsize / ovrlp;  /* 480 IQ pairs per xemnr call */
 
     ctx->bufSize = bsize;

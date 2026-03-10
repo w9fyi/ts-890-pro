@@ -13,12 +13,13 @@
 
 import Foundation
 import CoreMIDI
-import Combine
+import Observation
 
 // MARK: - Tuning step
 
 /// How far VFO A moves per relative encoder click when assigned to vfoTune.
 enum MIDITuningStep: Int, CaseIterable, Identifiable, Codable {
+    case hz1     =       1
     case hz10    =      10
     case hz100   =     100
     case khz1    =   1_000
@@ -29,6 +30,7 @@ enum MIDITuningStep: Int, CaseIterable, Identifiable, Codable {
 
     var label: String {
         switch self {
+        case .hz1:    return "1 Hz"
         case .hz10:   return "10 Hz"
         case .hz100:  return "100 Hz"
         case .khz1:   return "1 kHz"
@@ -150,23 +152,24 @@ struct MIDISourceInfo: Identifiable, Hashable {
 ///   1. Set `radio` to the app's `RadioState` instance (done in the App struct).
 ///   2. Present `MIDISectionView` to let the user connect a source and learn mappings.
 ///   3. Interact with the MIDI controller; assigned actions fire automatically.
-final class MIDIController: ObservableObject {
+@Observable
+final class MIDIController {
 
     static let shared = MIDIController()
 
     // MARK: Published
 
-    @Published var availableSources: [MIDISourceInfo] = []
-    @Published var selectedSourceRef: MIDIEndpointRef = 0
-    @Published var isConnected: Bool = false
-    @Published var lastMIDIEvent: String = ""
+    var availableSources: [MIDISourceInfo] = []
+    var selectedSourceRef: MIDIEndpointRef = 0
+    var isConnected: Bool = false
+    var lastMIDIEvent: String = ""
 
     /// True while we are waiting for the user to touch a control.
-    @Published var isLearning: Bool = false
+    var isLearning: Bool = false
     /// Set to the first MIDI event received while `isLearning` is true.
-    @Published var detectedEvent: DetectedMIDIEvent?
+    var detectedEvent: DetectedMIDIEvent?
     /// Ordered list of saved control → action mappings.
-    @Published var mappings: [MIDIMapping] = []
+    var mappings: [MIDIMapping] = []
 
     weak var radio: RadioState?
 

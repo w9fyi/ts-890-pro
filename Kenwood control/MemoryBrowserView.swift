@@ -2,145 +2,171 @@
 //  MemoryBrowserView.swift
 //  Kenwood control
 //
-//  Scrollable list of all 120 TS-890S memory channels with in-place editing.
+//  Picker-based memory channel browser with in-place editing.
+//  Opened as a sheet from MemoriesButton in TXRow.
 //
 
 import SwiftUI
 
 struct MemoryBrowserView: View {
-    @ObservedObject var radio: RadioState
+    var radio: RadioState
 
-    @State private var selectedChannelID: Int? = nil
+    @State private var selectedChannelID: Int = 0
     @State private var editFreqMHz: String = ""
     @State private var editName: String = ""
     @State private var editMode: KenwoodCAT.OperatingMode = .usb
     @State private var editFMNarrow: Bool = false
 
+    private var selectedChannel: MemoryChannel? {
+        radio.memoryChannels.first(where: { $0.id == selectedChannelID })
+    }
+
     var body: some View {
-        HSplitView {
-            // Left: channel list
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 12) {
-                    Text("Memories")
-                        .font(.title2)
-                    Spacer()
-                    if radio.isLoadingAllMemories {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                            .accessibilityLabel("Loading memory channels")
-                    }
-                    Button("Load All") {
-                        radio.loadAllMemoryChannels()
-                    }
+        VStack(alignment: .leading, spacing: 14) {
+
+            // Header
+            HStack {
+                Text("Memory Channels").font(.title2)
+                Spacer()
+                if radio.isLoadingAllMemories {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .accessibilityLabel("Loading memory channels")
+                }
+                Button("Load All") { radio.loadAllMemoryChannels() }
                     .disabled(radio.isLoadingAllMemories)
                     .accessibilityHint("Reads all 120 memory channels from the radio")
-                }
-                .padding([.top, .horizontal])
+            }
 
-                if radio.memoryChannels.isEmpty {
-                    Text(radio.isLoadingAllMemories ? "Loading..." : "Press Load All to read memories from the radio.")
-                        .foregroundStyle(.secondary)
-                        .padding()
-                    Spacer()
-                } else {
-                    List(radio.memoryChannels, selection: $selectedChannelID) { ch in
-                        MemoryRowView(channel: ch, isSelected: selectedChannelID == ch.id)
-                            .tag(ch.id)
+            Divider()
+
+            // Channel selector
+            HStack(spacing: 10) {
+                Text("Channel:")
+
+                Picker("Channel", selection: $selectedChannelID) {
+                    ForEach(0..<120, id: \.self) { i in
+                        Text(channelPickerLabel(i)).tag(i)
                     }
-                    .onChange(of: selectedChannelID) { _, newID in
-                        guard let id = newID,
-                              let ch = radio.memoryChannels.first(where: { $0.id == id }) else { return }
+                }
+                .frame(minWidth: 260)
+                .accessibilityLabel("Memory channel")
+                .onChange(of: selectedChannelID) { _, id in
+                    if let ch = radio.memoryChannels.first(where: { $0.id == id }) {
                         loadEditFields(from: ch)
-                    }
-                }
-            }
-            .frame(minWidth: 300)
-
-            // Right: editor for the selected channel
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let id = selectedChannelID,
-                       let ch = radio.memoryChannels.first(where: { $0.id == id }) {
-                        Text("Channel \(String(format: "%03d", id))")
-                            .font(.title3)
-
-                        HStack(spacing: 12) {
-                            Button("Tune to this channel") {
-                                radio.setMemoryMode(enabled: true)
-                                radio.recallMemoryChannel(id)
-                            }
-                            .accessibilityHint("Switches radio to memory mode and tunes to channel \(id)")
-
-                            Button("Recall (VFO copy)") {
-                                radio.recallMemoryChannel(id)
-                            }
-                            .accessibilityHint("Copies memory frequency to VFO")
-                        }
-
-                        Divider()
-
-                        Text("Edit Channel")
-                            .font(.headline)
-
-                        HStack(spacing: 12) {
-                            Text("Frequency (MHz):")
-                            TextField("e.g. 7.100000", text: $editFreqMHz)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 160)
-                                .accessibilityLabel("Memory channel frequency in megahertz")
-                        }
-
-                        HStack(spacing: 12) {
-                            Text("Name (10 chars):")
-                            TextField("Up to 10", text: $editName)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 200)
-                                .onChange(of: editName) { _, v in
-                                    if v.count > 10 { editName = String(v.prefix(10)) }
-                                }
-                                .accessibilityLabel("Memory channel name up to 10 characters")
-                        }
-
-                        HStack(spacing: 12) {
-                            Text("Mode:")
-                            Picker("Mode", selection: $editMode) {
-                                ForEach(KenwoodCAT.OperatingMode.allCases, id: \.rawValue) { m in
-                                    Text(m.label).tag(m)
-                                }
-                            }
-                            .frame(width: 160)
-                            .accessibilityLabel("Memory channel mode")
-
-                            Toggle("FM Narrow", isOn: $editFMNarrow)
-                                .disabled(editMode != .fm)
-                        }
-
-                        HStack(spacing: 12) {
-                            Button("Save Changes") {
-                                saveChannel(id: id)
-                            }
-                            .accessibilityHint("Writes edited frequency, mode, and name to channel \(id)")
-
-                            Button("Revert") {
-                                loadEditFields(from: ch)
-                            }
-                            .accessibilityHint("Restores the editor to the last received values for channel \(id)")
-                        }
-
-                        Text("Current on radio: \(ch.frequencyMHz) MHz • \(ch.mode.label) • \"\(ch.name)\"")
-                            .font(.system(.footnote, design: .monospaced))
-                            .foregroundStyle(.secondary)
-
                     } else {
-                        Text("Select a memory channel from the list.")
-                            .foregroundStyle(.secondary)
+                        radio.queryMemoryChannel(id)
+                        editFreqMHz = ""
+                        editName = ""
+                        editMode = .usb
+                        editFMNarrow = false
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
+
+                Stepper("", value: $selectedChannelID, in: 0...119)
+                    .labelsHidden()
+                    .accessibilityLabel("Step channel number")
+
+                Divider().frame(height: 18)
+
+                Button("Recall") { radio.recallMemoryChannel(selectedChannelID) }
+                    .accessibilityHint("Copies channel \(selectedChannelID) frequency to VFO")
+
+                Button("Tune") {
+                    radio.setMemoryMode(enabled: true)
+                    radio.recallMemoryChannel(selectedChannelID)
+                }
+                .accessibilityHint("Switches to memory mode and tunes to channel \(selectedChannelID)")
             }
-            .frame(minWidth: 300)
+
+            // Current channel summary
+            Group {
+                if let ch = selectedChannel {
+                    if ch.isEmpty {
+                        Text("Channel \(String(format: "%03d", ch.id)): empty")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Channel \(String(format: "%03d", ch.id)): \(ch.frequencyMHz) MHz • \(ch.mode.label)\(ch.name.isEmpty ? "" : " • \"\(ch.name)\"")")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text(radio.memoryChannels.isEmpty
+                         ? "Press Load All to read memories from the radio."
+                         : "Channel \(String(format: "%03d", selectedChannelID)): not loaded — press Load All or Recall to query.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityLabel("Channel info")
+
+            Divider()
+
+            // Editor
+            Text("Edit Channel \(String(format: "%03d", selectedChannelID))")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                Text("Frequency (MHz):")
+                TextField("e.g. 7.100000", text: $editFreqMHz)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 160)
+                    .accessibilityLabel("Frequency in megahertz")
+                Button("Use VFO A") {
+                    if let hz = radio.vfoAFrequencyHz {
+                        editFreqMHz = String(format: "%.6f", Double(hz) / 1_000_000.0)
+                    }
+                    if let m = radio.operatingMode { editMode = m }
+                }
+                .accessibilityHint("Fills frequency and mode from VFO A")
+            }
+
+            HStack(spacing: 12) {
+                Text("Name (10 chars):")
+                TextField("Up to 10", text: $editName)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+                    .onChange(of: editName) { _, v in
+                        if v.count > 10 { editName = String(v.prefix(10)) }
+                    }
+                    .accessibilityLabel("Channel name up to 10 characters")
+            }
+
+            HStack(spacing: 12) {
+                Text("Mode:")
+                Picker("Mode", selection: $editMode) {
+                    ForEach(KenwoodCAT.OperatingMode.allCases, id: \.rawValue) { m in
+                        Text(m.label).tag(m)
+                    }
+                }
+                .frame(width: 160)
+                .accessibilityLabel("Operating mode")
+                Toggle("FM Narrow", isOn: $editFMNarrow)
+                    .disabled(editMode != .fm)
+            }
+
+            HStack(spacing: 12) {
+                Button("Save to Radio") { saveChannel(id: selectedChannelID) }
+                    .accessibilityHint("Writes frequency, mode, and name to channel \(selectedChannelID)")
+                Button("Revert") {
+                    if let ch = selectedChannel { loadEditFields(from: ch) }
+                }
+                .disabled(selectedChannel == nil)
+                .accessibilityHint("Restores editor to last received values")
+            }
         }
+        .padding(16)
+        .frame(minWidth: 520, minHeight: 340)
+        .controlSize(.regular)
+    }
+
+    // Picker row label: "042  14.225000 MHz  USB  "DX Net""
+    private func channelPickerLabel(_ i: Int) -> String {
+        guard let ch = radio.memoryChannels.first(where: { $0.id == i }) else {
+            return String(format: "%03d", i)
+        }
+        if ch.isEmpty { return String(format: "%03d  (empty)", i) }
+        let namePart = ch.name.isEmpty ? "" : "  \"\(ch.name)\""
+        return String(format: "%03d  %@ MHz  %@%@", i, ch.frequencyMHz, ch.mode.label, namePart)
     }
 
     private func loadEditFields(from ch: MemoryChannel) {
@@ -152,56 +178,8 @@ struct MemoryBrowserView: View {
 
     private func saveChannel(id: Int) {
         let mhz = Double(editFreqMHz.replacingOccurrences(of: ",", with: ".")) ?? 0
-        let hz = Int((mhz * 1_000_000).rounded())
-        radio.programMemoryChannel(
-            channel: id,
-            frequencyHz: hz,
-            mode: editMode,
-            fmNarrow: editFMNarrow,
-            name: editName
-        )
-    }
-}
-
-private struct MemoryRowView: View {
-    let channel: MemoryChannel
-    let isSelected: Bool
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(String(format: "%03d", channel.id))
-                .font(.system(.body, design: .monospaced))
-                .frame(width: 36, alignment: .trailing)
-                .foregroundStyle(isSelected ? .primary : .secondary)
-
-            if channel.isEmpty {
-                Text("(empty)")
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(channel.frequencyMHz + " MHz")
-                        .font(.system(.body, design: .monospaced))
-                    HStack(spacing: 6) {
-                        Text(channel.mode.label)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if !channel.name.isEmpty {
-                            Text("·")
-                                .foregroundStyle(.secondary)
-                            Text(channel.name)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding(.vertical, 2)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(channel.isEmpty
-            ? "Channel \(channel.id), empty"
-            : "Channel \(channel.id), \(channel.frequencyMHz) megahertz, \(channel.mode.label)\(channel.name.isEmpty ? "" : ", \(channel.name)")")
+        let hz  = Int((mhz * 1_000_000).rounded())
+        radio.programMemoryChannel(channel: id, frequencyHz: hz,
+                                   mode: editMode, fmNarrow: editFMNarrow, name: editName)
     }
 }

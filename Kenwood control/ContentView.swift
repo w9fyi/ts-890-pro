@@ -11,104 +11,14 @@ import AppKit
 struct ContentView: View {
     let radio: RadioState
 
-    enum Section: String, Hashable {
-        case connection, radio, audio, equalizer, memories, menu, profiles, midi, logs, ft8
-    }
-
-    @AppStorage("UI.SelectedSection") private var selectedSectionRaw: String = Section.connection.rawValue
-    @State private var selectedSection: Section
-
-    @State private var host: String
-    @State private var portString: String
-    @State private var showKnsWizard: Bool = false
-    @State private var lastConnectedHost: String = UserDefaults.standard.string(forKey: "LastConnectedHost") ?? ""
-
-    init(radio: RadioState) {
-        self.radio = radio
-        _selectedSection = State(initialValue: Section(rawValue: UserDefaults.standard.string(forKey: "UI.SelectedSection") ?? "") ?? .connection)
-        _host = State(initialValue: KNSSettings.loadLastHost() ?? "192.168.50.56")
-        if let p = KNSSettings.loadLastPort() {
-            _portString = State(initialValue: String(p))
-        } else {
-            _portString = State(initialValue: "60000")
-        }
-    }
-
     var body: some View {
-        NavigationSplitView {
-            List(selection: $selectedSection) {
-                Text("Connection").tag(Section.connection)
-                Text("Radio").tag(Section.radio)
-                Text("Audio").tag(Section.audio)
-                Text("Equalizer").tag(Section.equalizer)
-                Text("Memories").tag(Section.memories)
-                Text("Menu Access").tag(Section.menu)
-                Text("Profiles").tag(Section.profiles)
-                Text("MIDI").tag(Section.midi)
-                Text("Logs").tag(Section.logs)
-                Text("FT8").tag(Section.ft8)
-            }
-            .navigationTitle("TS-890 Pro")
-        } detail: {
-            switch selectedSection {
-            case .connection:
-                ConnectionSectionView(
-                    radio: radio,
-                    host: $host,
-                    portString: $portString,
-                    showKnsWizard: $showKnsWizard,
-                    lastConnectedHost: $lastConnectedHost
-                )
-            case .radio:
-                RadioPanelView(radio: radio)
-            case .audio:
-                AudioSectionView(radio: radio)
-            case .equalizer:
-                EqualizerSectionView(radio: radio)
-            case .memories:
-                MemoryBrowserView(radio: radio)
-            case .menu:
-                RadioMenuView(radio: radio)
-            case .profiles:
-                ConnectionProfilesView(radio: radio)
-            case .midi:
-                MIDISectionView(radio: radio)
-            case .logs:
-                LogsSectionView(radio: radio)
-            case .ft8:
-                FT8SectionView(radio: radio)
-            }
-        }
-        .controlSize(.large)
-        .sheet(isPresented: $showKnsWizard) {
-            KnsWizardSheetView(
-                radio: radio,
-                host: $host,
-                portString: $portString,
-                showKnsWizard: $showKnsWizard,
-                lastConnectedHost: lastConnectedHost
-            )
-        }
-        .onChange(of: selectedSection) { _, newValue in
-            selectedSectionRaw = newValue.rawValue
-            AppFileLogger.shared.log("UI: selectedSection=\(String(describing: newValue))")
-        }
-        .onReceive(NotificationCenter.default.publisher(for: KenwoodSelectSectionNotification)) { note in
-            guard let raw = note.userInfo?[KenwoodSelectSectionUserInfoKey] as? String else { return }
-            guard let sec = Section(rawValue: raw) else { return }
-            selectedSection = sec
-        }
-        .onAppear {
-            // Keep @State and @AppStorage in sync even if the stored value changes between runs.
-            if let sec = Section(rawValue: selectedSectionRaw) {
-                selectedSection = sec
-            }
-        }
+        FrontPanelView(radio: radio)
     }
 }
 
 private struct ConnectionSectionView: View {
-    @ObservedObject var radio: RadioState
+    @Bindable var radio: RadioState
+    private let diagnostics = DiagnosticsStore.shared
     @Binding var host: String
     @Binding var portString: String
     @Binding var showKnsWizard: Bool
@@ -167,7 +77,7 @@ private struct ConnectionSectionView: View {
                         Text("Status: \(radio.connectionStatus)")
                             .font(.system(.body, design: .monospaced))
 
-                        if let err = radio.lastError {
+                        if let err = diagnostics.lastError {
                             Text(err)
                                 .foregroundStyle(.red)
                                 .font(.system(.body, design: .monospaced))
@@ -273,7 +183,7 @@ private struct ConnectionSectionView: View {
                         .font(.footnote)
                         .accessibilityLabel("Play C Q in Morse code through speakers on connect, and 73 on disconnect")
 
-                    if let err = radio.lastError {
+                    if let err = diagnostics.lastError {
                         Text(err)
                             .foregroundStyle(.red)
                             .font(.system(.body, design: .monospaced))
@@ -305,7 +215,7 @@ private struct ConnectionSectionView: View {
 }
 
 private struct RadioSectionView: View {
-    @ObservedObject var radio: RadioState
+    @Bindable var radio: RadioState
 
     @State private var freqMHzString: String = "7.100"
     @State private var freqBMHzString: String = "7.100"
@@ -704,6 +614,7 @@ private struct RadioSectionView: View {
                         }
                     ), in: 5...100, step: 1)
                     .frame(width: 220)
+                    .accessibilityLabel("Transmit power in watts")
 
                     TextField("5-100", text: $txPowerWattsString)
                         .textFieldStyle(.roundedBorder)
@@ -769,6 +680,7 @@ private struct RadioSectionView: View {
                         }
                     ), in: 0...255, step: 1)
                     .frame(width: 220)
+                    .accessibilityLabel("RF gain")
 
                     TextField("0-255", text: $rfGainString)
                         .textFieldStyle(.roundedBorder)
@@ -794,6 +706,7 @@ private struct RadioSectionView: View {
                         }
                     ), in: 0...255, step: 1)
                     .frame(width: 220)
+                    .accessibilityLabel("AF gain")
 
                     TextField("0-255", text: $afGainString)
                         .textFieldStyle(.roundedBorder)
@@ -898,8 +811,8 @@ private struct RadioSectionView: View {
     }
 }
 
-private struct AudioSectionView: View {
-    @ObservedObject var radio: RadioState
+struct AudioSectionView: View {
+    @Bindable var radio: RadioState
 
     @State private var voipOutString: String = ""
     @State private var voipInString: String = ""
@@ -934,6 +847,10 @@ private struct AudioSectionView: View {
     // MARK: - USB Audio Body
 
     @ViewBuilder private var usbAudioBody: some View {
+        txAudioSourceSection
+
+        Divider()
+
         // USB Audio Monitor device selection and volume
         VStack(alignment: .leading, spacing: 10) {
             Text("USB Audio Monitor")
@@ -970,6 +887,7 @@ private struct AudioSectionView: View {
                     set: { radio.setAudioMonitorOutputGain($0) }
                 ), in: 0.1...4.0)
                 .frame(width: 240)
+                .accessibilityLabel("Monitor volume")
                 .accessibilityValue(String(format: "%.2f", radio.audioMonitorOutputGain))
 
                 Text(String(format: "%.2f", radio.audioMonitorOutputGain))
@@ -1036,6 +954,100 @@ private struct AudioSectionView: View {
         }
     }
 
+    // MARK: - TX Audio Source Section
+
+    @ViewBuilder private var txAudioSourceSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("TX Audio Source")
+                .font(.headline)
+
+            Picker("TX Audio Source", selection: Binding(
+                get: { radio.txAudioSource },
+                set: { radio.setTXAudioSource($0) }
+            )) {
+                Text("Radio (Front Panel Mic)").tag(RadioState.TXAudioSource.hardware)
+                Text("USB Mic via App (Passthrough)").tag(RadioState.TXAudioSource.usbPassthrough)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("TX audio source. Radio front panel mic, or USB mic routed through the app.")
+
+            if radio.txAudioSource == .usbPassthrough {
+                HStack(spacing: 12) {
+                    Text("Mic Input:")
+                    Picker("Mic input for TX", selection: $radio.selectedTXMicInputUID) {
+                        Text("System Default Input").tag("")
+                        ForEach(radio.audioInputDevices) { dev in
+                            Text(dev.displayName).tag(dev.uid)
+                        }
+                    }
+                    .frame(minWidth: 300)
+                    .accessibilityLabel("Microphone to use for TX audio")
+                    .onChange(of: radio.selectedTXMicInputUID) { _, _ in
+                        if radio.isTXPassthroughRunning { radio.startTXPassthrough() }
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Text("USB Codec Output:")
+                    Picker("USB Codec output device", selection: $radio.selectedTXCodecOutputUID) {
+                        Text("System Default Output").tag("")
+                        ForEach(radio.audioOutputDevices) { dev in
+                            Text(dev.displayName).tag(dev.uid)
+                        }
+                    }
+                    .frame(minWidth: 300)
+                    .accessibilityLabel("USB Codec output device for TX audio. Select the TS-890S USB Audio CODEC.")
+                    .onChange(of: radio.selectedTXCodecOutputUID) { _, _ in
+                        if radio.isTXPassthroughRunning { radio.startTXPassthrough() }
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Text("Mic Gain:")
+                    Slider(value: $radio.txPassthroughInputGain, in: 0.1...4.0)
+                        .frame(width: 240)
+                        .accessibilityLabel("Mic gain for TX passthrough")
+                        .accessibilityValue(String(format: "%.2f", radio.txPassthroughInputGain))
+                    Text(String(format: "%.2f", radio.txPassthroughInputGain))
+                        .font(.system(.body, design: .monospaced))
+                        .frame(width: 64, alignment: .trailing)
+                        .accessibilityHidden(true)
+                }
+
+                HStack(spacing: 12) {
+                    Button(radio.isTXPassthroughRunning ? "Stop TX Passthrough" : "Start TX Passthrough") {
+                        if radio.isTXPassthroughRunning {
+                            radio.stopTXPassthrough()
+                        } else {
+                            radio.startTXPassthrough()
+                        }
+                    }
+                    .accessibilityLabel(radio.isTXPassthroughRunning ? "Stop T X passthrough" : "Start T X passthrough")
+
+                    Text(radio.isTXPassthroughRunning ? "Running" : "Stopped")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(radio.isTXPassthroughRunning ? .green : .secondary)
+                        .accessibilityLabel(radio.isTXPassthroughRunning ? "T X passthrough running. Mic audio routing to radio." : "T X passthrough stopped")
+                }
+
+                if let err = radio.txPassthroughError {
+                    Text(err)
+                        .foregroundStyle(.red)
+                        .font(.system(.body, design: .monospaced))
+                        .accessibilityLabel("T X passthrough error: \(err)")
+                }
+
+                Text("Select your USB mic as Mic Input and the TS-890S USB Audio CODEC as USB Codec Output. The app sends MS002 to route USB audio to the radio TX chain.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("The radio uses its own front panel microphone. No app audio processing for TX.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     // MARK: - LAN Audio Body
 
     @ViewBuilder private var lanAudioBody: some View {
@@ -1073,6 +1085,7 @@ private struct AudioSectionView: View {
                         }
                     ), in: 0...100, step: 1)
                     .frame(width: 240)
+                    .accessibilityLabel("VoIP output volume")
 
                     TextField("0-100", text: $voipOutString)
                         .textFieldStyle(.roundedBorder)
@@ -1102,6 +1115,7 @@ private struct AudioSectionView: View {
                         }
                     ), in: 0...100, step: 1)
                     .frame(width: 240)
+                    .accessibilityLabel("VoIP microphone input level")
 
                     TextField("0-100", text: $voipInString)
                         .textFieldStyle(.roundedBorder)
@@ -1165,6 +1179,7 @@ private struct AudioSectionView: View {
                     set: { radio.setLanAudioOutputGain($0) }
                 ), in: 0.1...4.0)
                 .frame(width: 240)
+                .accessibilityLabel("LAN audio output volume")
 
                 Text(String(format: "%.2f", radio.lanAudioOutputGain))
                     .font(.system(.body, design: .monospaced))
@@ -1177,17 +1192,8 @@ private struct AudioSectionView: View {
                     .accessibilityLabel("LAN audio error \(err)")
             }
 
-            HStack(spacing: 12) {
-                Text("Packets: \(radio.lanAudioPacketCount)")
-                    .font(.system(.body, design: .monospaced))
-                if let t = radio.lanAudioLastPacketAt {
-                    Text("Last: \(t.formatted(date: .omitted, time: .standard))")
-                        .font(.system(.body, design: .monospaced))
-                } else {
-                    Text("Last: (none)")
-                        .font(.system(.body, design: .monospaced))
-                }
-            }
+            LanAudioStatsView(radio: radio)
+                .accessibilityHidden(true)
         }
     }
 
@@ -1227,6 +1233,7 @@ private struct AudioSectionView: View {
                         set: { radio.setNoiseReductionStrength($0) }
                     ), in: 0...1, step: 0.05)
                     .frame(minWidth: 260)
+                    .accessibilityLabel("Noise reduction strength")
                     .accessibilityValue("\(Int(radio.noiseReductionStrength * 100)) percent")
 
                     Text("\(Int(radio.noiseReductionStrength * 100))%")
@@ -1255,8 +1262,9 @@ private struct AudioSectionView: View {
     }
 }
 
-private struct LogsSectionView: View {
-    @ObservedObject var radio: RadioState
+struct LogsSectionView: View {
+    @Bindable var radio: RadioState
+    private let diagnostics = DiagnosticsStore.shared
 
     var body: some View {
         ScrollView {
@@ -1279,8 +1287,8 @@ private struct LogsSectionView: View {
                     } else {
                         Text("PTT: (unknown)")
                     }
-                    Text("TX: \(radio.lastTXFrame)")
-                    Text("RX: \(radio.lastRXFrame)")
+                    Text("TX: \(diagnostics.lastTXFrame)")
+                    Text("RX: \(diagnostics.lastRXFrame)")
                 }
                 .font(.system(.body, design: .monospaced))
 
@@ -1326,12 +1334,12 @@ private struct LogsSectionView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Errors")
                         .font(.headline)
-                    if radio.errorLog.isEmpty {
+                    if diagnostics.errorLog.isEmpty {
                         Text("No errors")
                             .accessibilityLabel("No errors")
                     } else {
-                        List(radio.errorLog.indices, id: \.self) { index in
-                            Text(radio.errorLog[index])
+                        List(diagnostics.errorLog.indices, id: \.self) { index in
+                            Text(diagnostics.errorLog[index])
                         }
                         .frame(minHeight: 180)
                     }
@@ -1343,8 +1351,8 @@ private struct LogsSectionView: View {
     }
 }
 
-private struct KnsWizardSheetView: View {
-    @ObservedObject var radio: RadioState
+struct KnsWizardSheetView: View {
+    @Bindable var radio: RadioState
     @Binding var host: String
     @Binding var portString: String
     @Binding var showKnsWizard: Bool
@@ -1427,6 +1435,29 @@ private struct KnsWizardSheetView: View {
         }
         .onChange(of: radio.knsAccountType) { _, _ in
             radio.loadSavedCredentials(host: host)
+        }
+    }
+}
+
+// MARK: - LAN Audio Stats (isolated to prevent full AudioSectionView re-renders)
+
+/// Renders only the packet counter and last-packet timestamp.
+/// Keeping this in its own struct means @Observable only invalidates this tiny view
+/// on each packet batch update, not the entire AudioSectionView body.
+private struct LanAudioStatsView: View {
+    var radio: RadioState
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Packets: \(radio.lanAudioPacketCount)")
+                .font(.system(.body, design: .monospaced))
+            if let t = radio.lanAudioLastPacketAt {
+                Text("Last: \(t.formatted(date: .omitted, time: .standard))")
+                    .font(.system(.body, design: .monospaced))
+            } else {
+                Text("Last: (none)")
+                    .font(.system(.body, design: .monospaced))
+            }
         }
     }
 }

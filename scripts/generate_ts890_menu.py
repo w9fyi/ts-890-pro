@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Generate a Swift file with TS-890 menu definitions.
+
+Input: ~/Desktop/ts-890-menus.txt
+Output: Kenwood control/TS890MenuDefinitions.swift
+
+This script is intentionally idempotent and uses a simple parser for the provided menu list.
+"""
+
+from __future__ import annotations
+
+import re
+import pathlib
+
+MENU_FILE = pathlib.Path.home() / "Desktop" / "ts-890-menus.txt"
+OUTPUT_FILE = pathlib.Path(__file__).resolve().parent.parent / "Kenwood control" / "TS890MenuDefinitions.swift"
+
+
+def normalize_lines(raw_lines: list[str]) -> list[str]:
+    """Join wrapped lines into complete menu records."""
+
+    normalized: list[str] = []
+    current: str | None = None
+
+    for line in raw_lines:
+        line = line.rstrip("\n")
+        if not line.strip():
+            continue
+
+        # Detect start of a new record: menu number at beginning or a header line
+        if re.match(r"^\d+[:\-]", line.strip()) or re.match(r"^[A-Z0-9 \-]+MENU$", line.strip()):
+            if current is not None:
+                normalized.append(current)
+            current = line.strip()
+            continue
+
+        # "Menu Display Description" header line should be treated as a new record and ignored later
+        if line.strip().startswith("Menu Display"):
+            if current is not None:
+                normalized.append(current)
+            current = line.strip()
+            continue
+
+        # Otherwise, line is a continuation of the previous record
+        if current is None:
+            # Skip any top-of-file text before the first menu section
+            continue
+
+        current += " " + line.strip()
+
+    if current is not None:
+        normalized.append(current)
+
+    return normalized
+
+
+def extract_menu_item_from_line(line: str, current_group: str | None):
+    """Extract (group, number, label) from a normalized line.
+
+    The menu file is messy, so we use heuristics:
+    - Menu numbers are like "0-00" or "0:" or "1".
+    - Labels are taken as the text immediately after the menu number up until we hit a likely "settings" column.
+    """
+
+    # Skip header lines
+    if line.startswith("Menu Display"):
+        return None
+
+    # If the line is a group header (e.g., "BASIC CONFIGURATION MENU"), update group
+    if re.match(r"^[A-Z0-9 \-]+MENU$", line.strip()):
+        return (line.strip(), None, None)
+
+    # Strip off trailing reference tokens like "4-1" at end
+    tokens = line.split()
+    if tokens and re.match(r"^\d+-\d+$", tokens[-1]):
+        tokens = tokens[:-1]
+
+    if not tokens:
+        return None
+
+    # Identify menu number (first token)
+    number_token = tokens[0].rstrip(":")
+    if not re.match(r"^\d+(:|-)?\d*$", number_token):
+        return None
+
+    # Determine numeric menu number in the 0-00 style
+    if ":" in number_token:
+        # E.g. "0:" (LAN menu)
+        number_value = number_token.replace(":", "")
+        number_value = number_value.zfill(2)
+    else:
+        number_value = number_token
+
+    # Label is the rest of the line after the menu number, excluding the trailing reference.
+    # This keeps the menu display text and some of the description so the user can identify it.
+    label = line[len(tokens[0]) :].strip()
+    if label.endswith(tuple([" " + t for t in tokens[-1:]])):
+        # No-op: label already excludes trailing ref.
+        pass
+    # If label still contains the ref at the end, remove it
+    if re.search(r"\b\d+-\d+$", label):
+        label = re.sub(r"\b\d+-\d+$", "", label).strip()
+
+    return (current_group or "Unknown", number_value, label)
+
+
+def parse_menu_file(text: str):
+    raw_lines = text.splitlines()
+    normalized = normalize_lines(raw_lines)
+
+    items: list[tuple[str, str, str]] = []
+    current_group: str | None = None
+
+    for line in normalized:
+        extracted = extract_menu_item_from_line(line, current_group)
+        if not extracted:
+            continue
+
+        group, number, label = extracted
+        if label is None and number is None:
+            # group header line
+            current_group = group
+            continue
+        if group is not None and number is None and label is None:
+            continue
+
+        if label is None or number is None:
+            continue
+
+        if group == line.strip() and label == "":
+            # It's a group header line
+            current_group = group
+            continue
+
+        if current_group is None:
+            current_group = group
+
+        items.append((current_group, number, label))
+
+    # Deduplicate by group+number
+    seen = set()
+    unique = []
+    for group, number, label in items:
+        key = (group, number)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append((group, number, label))
+
+    return unique
+
+
+def format_swift(items):
+    lines: list[str] = []
+    lines.append("// Auto-generated from ts-890-menus.txt")
+    lines.append("// Do not edit this file manually; regenerate using scripts/generate_ts890_menu.py")
+    lines.append("")
+    lines.append("import Foundation")
+    lines.append("")
+    lines.append("public struct TS890MenuItem: Identifiable {")
+    lines.append("    public let id = UUID()")
+    lines.append("    public let group: String")
+    lines.append("    public let number: Int")
+    lines.append("    public let displayLabel: String")
+    lines.append("    public let detail: String")
+    lines.append("}")
+
+    def split_label(label: str) -> tuple[str, str]:
+        words = label.split()
+        display = " ".join(words[:6])
+        detail = " ".join(words[6:])
+        return display, detail
+    lines.append("")
+    lines.append("public let ts890MenuItems: [TS890MenuItem] = [")
+
+    def swift_escape(s: str) -> str:
+        return s.replace('"', '\\"')
+
+    def menu_number_to_int(num: str) -> int:
+        parts = num.split("-")
+        if len(parts) != 2:
+            return 0
+        return int(parts[0]) * 100 + int(parts[1])
+
+    # Sort by group then numeric menu number
+    items_sorted = sorted(items, key=lambda x: (x[0], menu_number_to_int(x[1])))
+
+    for group, number, label in items_sorted:
+        display, detail = split_label(label)
+        lines.append(
+            f"    TS890MenuItem(group: \"{swift_escape(group)}\", number: {menu_number_to_int(number)}, displayLabel: \"{swift_escape(display)}\", detail: \"{swift_escape(detail)}\"),"
+        )
+
+    lines.append("]")
+    return "\n".join(lines) + "\n"
+
+
+def main() -> int:
+    if not MENU_FILE.exists():
+        print(f"ERROR: menu file not found: {MENU_FILE}")
+        return 1
+
+    text = MENU_FILE.read_text(encoding="utf-8", errors="ignore")
+    items = parse_menu_file(text)
+
+    if not items:
+        print("ERROR: no menu items parsed")
+        return 1
+
+    out_text = format_swift(items)
+    OUTPUT_FILE.write_text(out_text, encoding="utf-8")
+    print(f"Wrote {len(items)} menu items to {OUTPUT_FILE}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

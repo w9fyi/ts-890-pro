@@ -7,8 +7,33 @@
 
 import SwiftUI
 import AppKit
+import Network
 
 let KenwoodSelectSectionNotification = Notification.Name("KenwoodControl.SelectSection")
+
+/// Triggers the macOS Local Network privacy permission dialog on first launch
+/// by briefly browsing for Bonjour services. The dialog appears before the user
+/// tries to connect, so they are not confused by a "network is down" error.
+final class LocalNetworkPermissionTrigger {
+    static let shared = LocalNetworkPermissionTrigger()
+    private var browser: NWBrowser?
+
+    func trigger() {
+        guard browser == nil else { return }
+        let params = NWParameters()
+        params.includePeerToPeer = true
+        browser = NWBrowser(for: .bonjour(type: "_services._dns-sd._udp", domain: "local."), using: params)
+        browser?.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready, .failed, .cancelled:
+                self?.browser?.cancel()
+                self?.browser = nil
+            default: break
+            }
+        }
+        browser?.start(queue: .main)
+    }
+}
 let KenwoodSelectSectionUserInfoKey = "section"
 
 final class PTTKeyMonitor {
@@ -112,12 +137,12 @@ struct Kenwood_controlApp: App {
     // Important: create exactly one RadioState instance and use it everywhere (UI + key monitors).
     // SwiftUI may re-run `init()` for the App struct; using `_radio = StateObject(...)` guarantees
     // we keep a single stable object.
-    @StateObject private var radio: RadioState
+    @State private var radio: RadioState
     @Environment(\.openWindow) private var openWindow
 
     init() {
         let r = RadioState()
-        _radio = StateObject(wrappedValue: r)
+        _radio = State(wrappedValue: r)
 
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
@@ -127,23 +152,34 @@ struct Kenwood_controlApp: App {
         AppFileLogger.shared.log("Tip: type `checklogs` in chat and I will fetch the latest log for you.")
         AppFileLogger.shared.log("Noise reduction backend: \(r.noiseReductionBackend)")
 
+        // Request Local Network permission immediately so the dialog appears on first launch,
+        // not when the user first presses Connect (which could look like a connection error).
+        LocalNetworkPermissionTrigger.shared.trigger()
+
         // Install push-to-talk monitor (Option-Space). This should not beep/click.
         PTTKeyMonitor.shared.attach(radio: r)
 
         // Wire the MIDI controller so encoder movements tune VFO A.
         MIDIController.shared.radio = r
+
+        // Wire the keyboard shortcut manager so assigned keys control the radio.
+        KeyboardShortcutsManager.shared.radio = r
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView(radio: radio)
+                .onReceive(NotificationCenter.default.publisher(for: .kbOpenPanel)) { note in
+                    guard let id = note.object as? String else { return }
+                    openWindow(id: id)
+                }
         }
-        Window("About Kenwood Control", id: "about") {
+        Window("About TS-890 Pro", id: "about") {
             AboutView()
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
-                Button("About Kenwood Control") {
+                Button("About TS-890 Pro") {
                     openWindow(id: "about")
                 }
             }
@@ -209,28 +245,48 @@ struct Kenwood_controlApp: App {
                 Text("Hold Option-Space for push-to-talk")
             }
             CommandMenu("View") {
-                Button("Connection") {
-                    NotificationCenter.default.post(name: KenwoodSelectSectionNotification, object: nil, userInfo: [KenwoodSelectSectionUserInfoKey: "connection"])
-                }
-                .keyboardShortcut("1", modifiers: [.command])
-                Button("Radio") {
-                    NotificationCenter.default.post(name: KenwoodSelectSectionNotification, object: nil, userInfo: [KenwoodSelectSectionUserInfoKey: "radio"])
-                }
-                .keyboardShortcut("2", modifiers: [.command])
-                Button("Audio") {
-                    NotificationCenter.default.post(name: KenwoodSelectSectionNotification, object: nil, userInfo: [KenwoodSelectSectionUserInfoKey: "audio"])
-                }
-                .keyboardShortcut("3", modifiers: [.command])
-                Button("Logs") {
-                    NotificationCenter.default.post(name: KenwoodSelectSectionNotification, object: nil, userInfo: [KenwoodSelectSectionUserInfoKey: "logs"])
-                }
-                .keyboardShortcut("4", modifiers: [.command])
-                Divider()
-                Button("FT8") {
-                    NotificationCenter.default.post(name: KenwoodSelectSectionNotification, object: nil, userInfo: [KenwoodSelectSectionUserInfoKey: "ft8"])
-                }
-                .keyboardShortcut("5", modifiers: [.command])
+                Button("FT8") { openWindow(id: "ft8") }
+                    .keyboardShortcut("8", modifiers: [.command, .shift])
+                Button("Tuning Panel") { openWindow(id: "tuning") }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
+                Button("Menu Access") { openWindow(id: "menuAccess") }
+                    .keyboardShortcut("m", modifiers: [.command, .option])
             }
+            CommandMenu("Band") {
+                Button("160 m") { radio.send("FA00001800000;") }
+                    .keyboardShortcut("1", modifiers: .command)
+                Button("80 m") { radio.send("FA00003500000;") }
+                    .keyboardShortcut("2", modifiers: .command)
+                Button("60 m") { radio.send("FA00005330500;") }
+                Button("40 m") { radio.send("FA00007000000;") }
+                    .keyboardShortcut("3", modifiers: .command)
+                Button("30 m") { radio.send("FA00010100000;") }
+                    .keyboardShortcut("4", modifiers: .command)
+                Button("20 m") { radio.send("FA00014000000;") }
+                    .keyboardShortcut("5", modifiers: .command)
+                Button("17 m") { radio.send("FA00018068000;") }
+                    .keyboardShortcut("6", modifiers: .command)
+                Button("15 m") { radio.send("FA00021000000;") }
+                    .keyboardShortcut("7", modifiers: .command)
+                Button("12 m") { radio.send("FA00024890000;") }
+                    .keyboardShortcut("8", modifiers: .command)
+                Button("10 m") { radio.send("FA00028000000;") }
+                    .keyboardShortcut("9", modifiers: .command)
+                Button("6 m") { radio.send("FA00050000000;") }
+                    .keyboardShortcut("0", modifiers: .command)
+            }
+        }
+        Settings {
+            SettingsView(radio: radio)
+        }
+        WindowGroup("FT8", id: "ft8") {
+            FT8SectionView(radio: radio)
+        }
+        WindowGroup("Tuning Panel", id: "tuning") {
+            TuningPanelView(radio: radio)
+        }
+        WindowGroup("Menu Access", id: "menuAccess") {
+            RadioMenuView(radio: radio)
         }
     }
 }

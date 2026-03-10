@@ -13,4 +13,9 @@
 #include "../ThirdParty/ft8_lib/ft8_bridge.h"
 #endif
 
+#if __has_include("../ThirdParty/codec2/src/freedv_api.h")
+#include "../ThirdParty/codec2/src/freedv_api.h"
+#include "../ThirdParty/codec2/src/modem_stats.h"
+#endif
+
 #endif /* BridgingHeader_h */

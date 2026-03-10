@@ -7,7 +7,7 @@
 //
 
 import SwiftUI
-import Combine
+import Observation
 
 // MARK: - Model
 
@@ -24,11 +24,12 @@ struct ConnectionProfile: Identifiable, Codable {
 
 // MARK: - Store
 
-final class ConnectionProfileStore: ObservableObject {
+@Observable
+final class ConnectionProfileStore {
     static let shared = ConnectionProfileStore()
     private let key = "ConnectionProfiles"
 
-    @Published var profiles: [ConnectionProfile] = []
+    var profiles: [ConnectionProfile] = []
 
     init() { load() }
 
@@ -64,8 +65,8 @@ final class ConnectionProfileStore: ObservableObject {
 // MARK: - View
 
 struct ConnectionProfilesView: View {
-    @ObservedObject var radio: RadioState
-    @ObservedObject private var store = ConnectionProfileStore.shared
+    var radio: RadioState
+    private let store = ConnectionProfileStore.shared
 
     @State private var showingAddSheet = false
     @State private var editingProfile: ConnectionProfile? = nil

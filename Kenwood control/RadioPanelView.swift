@@ -26,7 +26,8 @@ import Combine
 // MARK: - Top-level panel
 
 struct RadioPanelView: View {
-    @ObservedObject var radio: RadioState
+    var radio: RadioState
+    @Environment(\.openWindow) private var openWindow
 
     // Cmd+F → VFO A field focus
     @FocusState private var vfoAFocused: Bool
@@ -299,9 +300,17 @@ extension RadioPanelView {
                     PanelToggleButton(label: "NOTCH", isOn: radio.isNotchEnabled ?? false) {
                         radio.setNotchEnabled(!(radio.isNotchEnabled ?? false))
                     }
-                    PanelToggleButton(label: "BC", isOn: radio.beatCancelEnabled ?? false) {
-                        radio.setBeatCancelEnabled(!(radio.beatCancelEnabled ?? false))
+                    PanelCycleButton(
+                        label: "BC",
+                        value: radio.beatCancelMode?.label ?? "---"
+                    ) {
+                        radio.cycleBeatCancelMode()
+                    } contextItems: {
+                        ForEach(KenwoodCAT.BeatCancelMode.allCases) { mode in
+                            Button("BC: \(mode.label)") { radio.setBeatCancelMode(mode) }
+                        }
                     }
+                    .accessibilityHint("Beat cancel. Right-click or VO+Shift+M to jump to a value.")
                 }
 
                 // Row 2: Radio NR, AGC
@@ -345,10 +354,17 @@ extension RadioPanelView {
                     }
                     .accessibilityHint("RF attenuator. Right-click or VO+Shift+M to jump to a value.")
 
-                    PanelToggleButton(label: "PRE", isOn: radio.preampEnabled ?? false) {
-                        radio.setPreampEnabled(!(radio.preampEnabled ?? false))
+                    PanelCycleButton(
+                        label: "PRE",
+                        value: radio.preampLevel?.label ?? "---"
+                    ) {
+                        radio.cyclePreampLevel()
+                    } contextItems: {
+                        ForEach(KenwoodCAT.PreampLevel.allCases) { level in
+                            Button("PRE: \(level.label)") { radio.setPreampLevel(level) }
+                        }
                     }
-                    .accessibilityHint("Preamplifier on/off")
+                    .accessibilityHint("Preamplifier. Right-click or VO+Shift+M to jump to a value.")
                 }
 
                 // Row 4: Software NR quick-toggle
@@ -702,64 +718,30 @@ extension RadioPanelView {
 extension RadioPanelView {
     var eqSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("RX EQ")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-
-            SliderWithSteppers(
-                label: "RX Low",
-                value: eqBinding(get: \.rxEQLowGain, set: radio.setRXEQLowDebounced),
-                range: -20...10, fineStep: 1, coarseStep: 3,
-                displayFormat: { "\(Int($0)) dB" }, accessibilityUnit: "decibels"
-            )
-            SliderWithSteppers(
-                label: "RX Mid",
-                value: eqBinding(get: \.rxEQMidGain, set: radio.setRXEQMidDebounced),
-                range: -20...10, fineStep: 1, coarseStep: 3,
-                displayFormat: { "\(Int($0)) dB" }, accessibilityUnit: "decibels"
-            )
-            SliderWithSteppers(
-                label: "RX High",
-                value: eqBinding(get: \.rxEQHighGain, set: radio.setRXEQHighDebounced),
-                range: -20...10, fineStep: 1, coarseStep: 3,
-                displayFormat: { "\(Int($0)) dB" }, accessibilityUnit: "decibels"
-            )
-
-            Divider()
-
-            Text("TX EQ")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
-
-            SliderWithSteppers(
-                label: "TX Low",
-                value: eqBinding(get: \.txEQLowGain, set: radio.setTXEQLowDebounced),
-                range: -20...10, fineStep: 1, coarseStep: 3,
-                displayFormat: { "\(Int($0)) dB" }, accessibilityUnit: "decibels"
-            )
-            SliderWithSteppers(
-                label: "TX Mid",
-                value: eqBinding(get: \.txEQMidGain, set: radio.setTXEQMidDebounced),
-                range: -20...10, fineStep: 1, coarseStep: 3,
-                displayFormat: { "\(Int($0)) dB" }, accessibilityUnit: "decibels"
-            )
-            SliderWithSteppers(
-                label: "TX High",
-                value: eqBinding(get: \.txEQHighGain, set: radio.setTXEQHighDebounced),
-                range: -20...10, fineStep: 1, coarseStep: 3,
-                displayFormat: { "\(Int($0)) dB" }, accessibilityUnit: "decibels"
-            )
+            eqPresetRow(label: "TX EQ", preset: radio.txEQPreset) { radio.loadTXEQPreset($0) }
+            eqPresetRow(label: "RX EQ", preset: radio.rxEQPreset) { radio.loadRXEQPreset($0) }
+            Text("Full 18-band editing available in the EQ tab.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
-    private func eqBinding(
-        get keyPath: KeyPath<RadioState, Int?>,
-        set setter: @escaping (Int) -> Void
-    ) -> Binding<Double> {
-        Binding(
-            get: { Double(radio[keyPath: keyPath] ?? 0) },
-            set: { setter(Int($0.rounded())) }
-        )
+    private func eqPresetRow(
+        label: String,
+        preset: KenwoodCAT.EQPreset?,
+        onSelect: @escaping (KenwoodCAT.EQPreset) -> Void
+    ) -> some View {
+        HStack {
+            Text(label)
+                .font(.callout)
+            Spacer()
+            Menu(preset?.label ?? "—") {
+                ForEach(KenwoodCAT.EQPreset.allCases) { p in
+                    Button(p.label) { onSelect(p) }
+                }
+            }
+            .accessibilityLabel("\(label): \(preset?.label ?? "none")")
+        }
     }
 }
 
@@ -782,11 +764,7 @@ extension RadioPanelView {
             Divider()
 
             Button("All Settings in Menu Access →") {
-                NotificationCenter.default.post(
-                    name: KenwoodSelectSectionNotification,
-                    object: nil,
-                    userInfo: [KenwoodSelectSectionUserInfoKey: "menu"]
-                )
+                openWindow(id: "menuAccess")
             }
             .accessibilityHint("Opens the full Menu Access section with all EX menu items")
         }
@@ -906,6 +884,29 @@ extension RadioPanelView {
                         }
                     }
                     .accessibilityHint("Copies current VFO A frequency and mode to the program fields")
+                }
+
+                Divider()
+
+                // Scan controls
+                HStack(spacing: 8) {
+                    Button(radio.scanActive ? "Scanning…" : "Memory Scan") {
+                        radio.startMemoryScan()
+                    }
+                    .accessibilityLabel("Start memory scan")
+                    .accessibilityValue(radio.scanActive ? "Scanning" : "Stopped")
+
+                    Button("Stop Scan") { radio.stopScan() }
+                        .disabled(!radio.scanActive)
+                        .accessibilityLabel("Stop scan")
+                        .accessibilityValue(radio.scanActive ? "Active" : "Inactive")
+                        .accessibilityHint("Only available while scan is running")
+                }
+                .onChange(of: radio.scanActive) { _, isActive in
+                    NSAccessibility.post(element: NSApp as Any,
+                                        notification: .announcementRequested,
+                                        userInfo: [.announcement: isActive ? "Memory scan started" : "Memory scan stopped",
+                                                   .priority: NSAccessibilityPriorityLevel.high.rawValue])
                 }
             }
             .padding(.top, 4)
@@ -1133,7 +1134,8 @@ private struct LevelAdjustSheet: View {
 // MARK: - Configurable Meter Grid
 
 struct ConfigurableMeterGrid: View {
-    @ObservedObject var radio: RadioState
+    var radio: RadioState
+    private let meters = MeterStore.shared
 
     @AppStorage("Meter.slot0") private var slot0Raw: String = KenwoodCAT.MeterType.smeter.rawValue
     @AppStorage("Meter.slot1") private var slot1Raw: String = KenwoodCAT.MeterType.power.rawValue
@@ -1145,20 +1147,20 @@ struct ConfigurableMeterGrid: View {
     private var slot2: KenwoodCAT.MeterType { KenwoodCAT.MeterType(rawValue: slot2Raw) ?? .swr }
     private var slot3: KenwoodCAT.MeterType { KenwoodCAT.MeterType(rawValue: slot3Raw) ?? .alc }
 
-    private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
+    private let timer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-            AnalogMeterView(type: slot0, rawValue: radio.meterReadings[slot0.smIndex] ?? 0) {
+            AnalogMeterView(type: slot0, rawValue: meters.readings[slot0.smIndex] ?? 0) {
                 slot0Raw = $0.rawValue
             }
-            AnalogMeterView(type: slot1, rawValue: radio.meterReadings[slot1.smIndex] ?? 0) {
+            AnalogMeterView(type: slot1, rawValue: meters.readings[slot1.smIndex] ?? 0) {
                 slot1Raw = $0.rawValue
             }
-            AnalogMeterView(type: slot2, rawValue: radio.meterReadings[slot2.smIndex] ?? 0) {
+            AnalogMeterView(type: slot2, rawValue: meters.readings[slot2.smIndex] ?? 0) {
                 slot2Raw = $0.rawValue
             }
-            AnalogMeterView(type: slot3, rawValue: radio.meterReadings[slot3.smIndex] ?? 0) {
+            AnalogMeterView(type: slot3, rawValue: meters.readings[slot3.smIndex] ?? 0) {
                 slot3Raw = $0.rawValue
             }
         }

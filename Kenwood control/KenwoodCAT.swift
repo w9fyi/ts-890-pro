@@ -68,16 +68,31 @@ enum KenwoodCAT {
         case am = 5
         case fsk = 6
         case cwR = 7
+        // 8 unused by TS-890S
+        case fskR = 9
+        case psk = 10
+        case pskR = 11
+        case lsbData = 12
+        case usbData = 13
+        case fmData = 14
+        case amData = 15
 
         var label: String {
             switch self {
-            case .lsb: "LSB"
-            case .usb: "USB"
-            case .cw: "CW"
-            case .fm: "FM"
-            case .am: "AM"
-            case .fsk: "FSK"
-            case .cwR: "CW-R"
+            case .lsb:     "LSB"
+            case .usb:     "USB"
+            case .cw:      "CW"
+            case .fm:      "FM"
+            case .am:      "AM"
+            case .fsk:     "FSK"
+            case .cwR:     "CW-R"
+            case .fskR:    "FSK-R"
+            case .psk:     "PSK"
+            case .pskR:    "PSK-R"
+            case .lsbData: "LSB-D"
+            case .usbData: "USB-D"
+            case .fmData:  "FM-D"
+            case .amData:  "AM-D"
             }
         }
     }
@@ -88,7 +103,28 @@ enum KenwoodCAT {
 
     static func setOperatingMode(_ mode: OperatingMode) -> String {
         // Kenwood notes P1 is ignored for setting; provide a placeholder.
-        "OM0\(mode.rawValue);"
+        // Mode digit must be uppercase hex (A-F for data/PSK modes).
+        String(format: "OM0%X;", mode.rawValue)
+    }
+
+    // MARK: - FreeDV mode configuration
+    //
+    // FreeDV HF modes use USB-DATA on the TS-890S (OM0D = USB-DATA, 0xD = 13).
+    // MS001 = front panel mic, MS002 = USB audio codec, MS003 = LAN (KNS) audio.
+
+    /// Commands to enter USB-DATA mode for FreeDV over LAN (KNS) audio.
+    static func configureForFreeDVLan() -> [String] {
+        ["OM0D;", "MS003;"]
+    }
+
+    /// Commands to enter USB-DATA mode for FreeDV over USB audio codec.
+    static func configureForFreeDVUsb() -> [String] {
+        ["OM0D;", "MS002;"]
+    }
+
+    /// Restore USB (plain) + LAN audio after FreeDV session.
+    static func revertFromFreeDV(previousMode: String = "OM02;") -> [String] {
+        [previousMode, "MS001;"]
     }
 
     // MARK: - Mode / Data Mode (MD)
@@ -295,47 +331,108 @@ enum KenwoodCAT {
         return String(format: "MA2%03d %@;", clamped, padded)
     }
 
-    // MARK: - Extended Menu (EX) — EQ, NB level, NR level, TX bandwidth, etc.
+    // MARK: - Extended Menu (EX) — menu settings, EQ, NB level, TX bandwidth, etc.
     //
-    // TS-890S format: EX + 3-digit menu number + value
-    // Query:  EX[nnn];
-    // Set:    EX[nnn][value];   (value format varies: signed dB uses +/-nn, others plain integer)
+    // TS-890S EX command format (5-digit parameter block):
+    //   P1: Menu type — 0 = Regular Menu, 1 = Advanced Menu
+    //   P2: Category number 00–99  (ignored / enter 00 for Advanced Menu)
+    //   P3: Item number within category 00–99
+    //   P4: Config mode — space = normal setting, 9 = reset to factory default
+    //   P5: Value string (3-digit zero-padded for most; +/-nn for signed EQ dB)
     //
-    // Known EQ menu numbers (verify against your firmware with EX query):
-    //   TX EQ: 030 = Low gain, 031 = Mid gain, 032 = High gain  (-20…+10 dB)
-    //   RX EQ: 060 = Low gain, 061 = Mid gain, 062 = High gain  (-20…+10 dB)
+    // Read:  EX<P1><P2><P3>;           e.g.  EX00030;
+    // Set:   EX<P1><P2><P3> <P5>;      e.g.  EX00030 005;   (note space = P4)
+    // Response: EX<P1><P2><P3> <P5>;   e.g.  EX00030 005;
+    //
+    // menuNumber encoding used in this codebase:
+    //   Regular menu  (P1=0):  menuNumber = P2*100 + P3
+    //   Advanced menu (P1=1):  menuNumber = 10000 + P3   (P2 is always 00)
+    //
+    // Run Settings → Discover to scan all valid EX items from the radio and
+    // confirm the correct P2/P3 for each function on your firmware version.
 
     static func getMenuValue(_ menuNumber: Int) -> String {
-        String(format: "EX%03d;", menuNumber)
+        if menuNumber >= 10000 {
+            return String(format: "EX100%02d;", menuNumber - 10000)
+        }
+        return String(format: "EX0%02d%02d;", menuNumber / 100, menuNumber % 100)
     }
 
-    /// Set a plain-integer menu value (e.g. NB level 0-10, TX bandwidth, etc.)
+    /// Set a plain-integer menu value (0-padded to 3 digits, normal config P4=space).
     static func setMenuValue(_ menuNumber: Int, value: Int) -> String {
-        String(format: "EX%03d%d;", menuNumber, value)
+        if menuNumber >= 10000 {
+            return String(format: "EX100%02d %03d;", menuNumber - 10000, value)
+        }
+        return String(format: "EX0%02d%02d %03d;", menuNumber / 100, menuNumber % 100, value)
     }
 
-    /// Set a signed dB EQ gain (−20…+10). Uses explicit +/- sign per TS-890S protocol.
-    static func setEQGain(_ menuNumber: Int, dB: Int) -> String {
-        let clamped = max(-20, min(dB, 10))
-        let sign = clamped >= 0 ? "+" : "-"
-        return String(format: "EX%03d%@%02d;", menuNumber, sign, abs(clamped))
+    // MARK: - Built-in Radio EQ (UT / UR — 18-band graphic EQ)
+    //
+    // TX EQ: UT<v01><v02>…<v18>;   each vN is a 2-digit zero-padded raw value 00–30
+    // RX EQ: UR<v01><v02>…<v18>;   same encoding
+    //
+    // dB ↔ raw:  raw = 6 − dB  →  dB = 6 − raw
+    // Range:  raw 00 = +6 dB,  raw 06 = 0 dB,  raw 30 = −24 dB
+    //
+    // Presets (TX: EQT, RX: EQR):
+    //   Query current preset:  EQT0;  / EQR0;   → radio responds EQT0n; / EQR0n;
+    //   Load preset n:         EQT1n; / EQR1n;  (follow with UT;/UR; to refresh bands)
+
+    enum EQPreset: Int, CaseIterable, Identifiable {
+        case highBoost1 = 0, highBoost2 = 1, formantPass = 2
+        case bassBoost1 = 3, bassBoost2 = 4, conventional = 5
+        case user1 = 6, user2 = 7, user3 = 8
+        var id: Int { rawValue }
+        var label: String {
+            ["High Boost 1", "High Boost 2", "Formant Pass",
+             "Bass Boost 1", "Bass Boost 2", "Conventional",
+             "User 1", "User 2", "User 3"][rawValue]
+        }
+        /// Factory presets (0–5) cannot be permanently overwritten on the radio.
+        var isFactory: Bool { rawValue < 6 }
     }
 
-    // MARK: - TX EQ convenience (menu 030–032)
-    static func getTXEQLow() -> String    { getMenuValue(30) }
-    static func getTXEQMid() -> String    { getMenuValue(31) }
-    static func getTXEQHigh() -> String   { getMenuValue(32) }
-    static func setTXEQLow(_ dB: Int) -> String   { setEQGain(30, dB: dB) }
-    static func setTXEQMid(_ dB: Int) -> String   { setEQGain(31, dB: dB) }
-    static func setTXEQHigh(_ dB: Int) -> String  { setEQGain(32, dB: dB) }
+    /// Band center frequencies for the TS-890S 18-band EQ (UT/UR commands).
+    /// Linear steps: P1 = 0 Hz, P2 = 300 Hz, … P18 = 5100 Hz (300 Hz spacing).
+    /// Source: TS-890S PC Command Reference, UR/UT command parameter list.
+    static let eqBandLabels: [String] = [
+        "0 Hz", "300 Hz", "600 Hz", "900 Hz", "1200 Hz", "1500 Hz",
+        "1800 Hz", "2100 Hz", "2400 Hz", "2700 Hz", "3000 Hz", "3300 Hz",
+        "3600 Hz", "3900 Hz", "4200 Hz", "4500 Hz", "4800 Hz", "5100 Hz"
+    ]
 
-    // MARK: - RX EQ convenience (menu 060–062)
-    static func getRXEQLow() -> String    { getMenuValue(60) }
-    static func getRXEQMid() -> String    { getMenuValue(61) }
-    static func getRXEQHigh() -> String   { getMenuValue(62) }
-    static func setRXEQLow(_ dB: Int) -> String   { setEQGain(60, dB: dB) }
-    static func setRXEQMid(_ dB: Int) -> String   { setEQGain(61, dB: dB) }
-    static func setRXEQHigh(_ dB: Int) -> String  { setEQGain(62, dB: dB) }
+    /// Encode 18 dB values (clamped −24…+6) into the 36-character UT/UR wire payload.
+    static func encodeBands(_ bands: [Int]) -> String {
+        precondition(bands.count == 18)
+        return bands.map { dB in
+            let raw = max(0, min(30, 6 - dB))
+            return String(format: "%02d", raw)
+        }.joined()
+    }
+
+    /// Decode a 36-character UT/UR wire payload into 18 dB values, or nil on malformed input.
+    static func decodeBands(_ payload: String) -> [Int]? {
+        guard payload.count == 36 else { return nil }
+        var result: [Int] = []
+        var i = payload.startIndex
+        while i < payload.endIndex {
+            let end = payload.index(i, offsetBy: 2)
+            guard let raw = Int(payload[i..<end]) else { return nil }
+            result.append(6 - raw)
+            i = end
+        }
+        return result.count == 18 ? result : nil
+    }
+
+    static func getTXEQ() -> String { "UT;" }
+    static func setTXEQ(_ bands: [Int]) -> String { "UT\(encodeBands(bands));" }
+    static func getRXEQ() -> String { "UR;" }
+    static func setRXEQ(_ bands: [Int]) -> String { "UR\(encodeBands(bands));" }
+
+    static func getTXEQPreset() -> String { "EQT0;" }
+    static func setTXEQPreset(_ preset: EQPreset) -> String { "EQT1\(preset.rawValue);" }
+    static func getRXEQPreset() -> String { "EQR0;" }
+    static func setRXEQPreset(_ preset: EQPreset) -> String { "EQR1\(preset.rawValue);" }
 
     // MARK: - AGC (GC)
 
@@ -366,8 +463,29 @@ enum KenwoodCAT {
 
     // MARK: - Preamp (PA)
 
+    enum PreampLevel: Int, CaseIterable, Identifiable {
+        case off = 0, pre1 = 1, pre2 = 2
+        var id: Int { rawValue }
+        var label: String { ["Off", "PRE1", "PRE2"][rawValue] }
+        var next: PreampLevel { PreampLevel(rawValue: (rawValue + 1) % 3)! }
+    }
+
     static func getPreamp() -> String { "PA;" }
-    static func setPreamp(enabled: Bool) -> String { "PA\(enabled ? 1 : 0);" }
+    static func setPreamp(_ level: PreampLevel) -> String { "PA\(level.rawValue);" }
+
+    // MARK: - Filter Slot A/B/C (FL)
+    // FL P1 P2; — P1=display area (0=left/main), P2=filter slot (0=A,1=B,2=C)
+    // Read: FL0;  Set: FL0n; (e.g. FL01; = Filter B on main display)
+
+    enum FilterSlot: Int, CaseIterable, Identifiable {
+        case a = 0, b = 1, c = 2
+        var id: Int { rawValue }
+        var label: String { ["A", "B", "C"][rawValue] }
+        var next: FilterSlot { FilterSlot(rawValue: (rawValue + 1) % 3)! }
+    }
+
+    static func getFilterSlot() -> String { "FL0;" }
+    static func setFilterSlot(_ slot: FilterSlot) -> String { "FL0\(slot.rawValue);" }
 
     // MARK: - Noise Blanker (NB)
 
@@ -376,8 +494,15 @@ enum KenwoodCAT {
 
     // MARK: - Beat Cancel (BC)
 
+    enum BeatCancelMode: Int, CaseIterable, Identifiable {
+        case off = 0, bc1 = 1, bc2 = 2
+        var id: Int { rawValue }
+        var label: String { ["Off", "BC1", "BC2"][rawValue] }
+        var next: BeatCancelMode { BeatCancelMode(rawValue: (rawValue + 1) % 3)! }
+    }
+
     static func getBeatCancel() -> String { "BC;" }
-    static func setBeatCancel(enabled: Bool) -> String { "BC\(enabled ? 1 : 0);" }
+    static func setBeatCancel(_ mode: BeatCancelMode) -> String { "BC\(mode.rawValue);" }
 
     // MARK: - Mic Gain (MG)
     // Format: MG0nnn; where nnn = 000-100
@@ -494,5 +619,19 @@ enum KenwoodCAT {
     static func getMeterValue(_ type: MeterType) -> String {
         guard type.smIndex >= 0 else { return "" }
         return "SM\(type.smIndex);"
+    }
+
+    // MARK: - Clock (CK)
+    // CK3 = time (HHMMSS, UTC), CK4 = date (YYYYMMDD).
+    // CK5 = UTC offset — read-only from this app (user configures on radio).
+
+    /// Set radio UTC time.  `CK3HHMMSS;`
+    static func setClockTime(hour: Int, minute: Int, second: Int) -> String {
+        String(format: "CK3%02d%02d%02d;", hour, minute, second)
+    }
+
+    /// Set radio UTC date.  `CK4YYYYMMDD;`
+    static func setClockDate(year: Int, month: Int, day: Int) -> String {
+        String(format: "CK4%04d%02d%02d;", year, month, day)
     }
 }

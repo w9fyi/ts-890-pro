@@ -76,11 +76,15 @@ final class KenwoodCATTests: XCTestCase {
     }
 
     func testSetPreamp_on() {
-        XCTAssertEqual(KenwoodCAT.setPreamp(enabled: true), "PA1;")
+        XCTAssertEqual(KenwoodCAT.setPreamp(.pre1), "PA1;")
     }
 
     func testSetPreamp_off() {
-        XCTAssertEqual(KenwoodCAT.setPreamp(enabled: false), "PA0;")
+        XCTAssertEqual(KenwoodCAT.setPreamp(.off), "PA0;")
+    }
+
+    func testSetPreamp_pre2() {
+        XCTAssertEqual(KenwoodCAT.setPreamp(.pre2), "PA2;")
     }
 
     // MARK: - AGC (GC)
@@ -120,11 +124,15 @@ final class KenwoodCATTests: XCTestCase {
     // MARK: - Beat Cancel (BC)
 
     func testSetBeatCancel_on() {
-        XCTAssertEqual(KenwoodCAT.setBeatCancel(enabled: true), "BC1;")
+        XCTAssertEqual(KenwoodCAT.setBeatCancel(.bc1), "BC1;")
     }
 
     func testSetBeatCancel_off() {
-        XCTAssertEqual(KenwoodCAT.setBeatCancel(enabled: false), "BC0;")
+        XCTAssertEqual(KenwoodCAT.setBeatCancel(.off), "BC0;")
+    }
+
+    func testSetBeatCancel_bc2() {
+        XCTAssertEqual(KenwoodCAT.setBeatCancel(.bc2), "BC2;")
     }
 
     // MARK: - TX Power (PC)
@@ -224,24 +232,33 @@ final class KenwoodCATTests: XCTestCase {
         XCTAssertEqual(KenwoodCAT.setReceiveFilterShiftHz(0), "IS+0000;")
     }
 
-    // MARK: - EQ Gain (EX)
+    // MARK: - Built-in EQ band encoding (UT/UR)
 
-    func testSetEQGain_positive() {
-        XCTAssertEqual(KenwoodCAT.setEQGain(30, dB: 10), "EX030+10;")
-        XCTAssertEqual(KenwoodCAT.setEQGain(30, dB: 0),  "EX030+00;")
+    func testEncodeBands_flat() {
+        // 0 dB → raw 6 → "06" × 18
+        let flat = Array(repeating: 0, count: 18)
+        XCTAssertEqual(KenwoodCAT.encodeBands(flat), String(repeating: "06", count: 18))
     }
 
-    func testSetEQGain_negative() {
-        XCTAssertEqual(KenwoodCAT.setEQGain(60, dB: -20), "EX060-20;")
-        XCTAssertEqual(KenwoodCAT.setEQGain(60, dB: -5),  "EX060-05;")
+    func testEncodeBands_maxGain() {
+        // +6 dB → raw 0 → "00" × 18
+        let max = Array(repeating: 6, count: 18)
+        XCTAssertEqual(KenwoodCAT.encodeBands(max), String(repeating: "00", count: 18))
     }
 
-    func testSetEQGain_clampsAbove10() {
-        XCTAssertEqual(KenwoodCAT.setEQGain(30, dB: 11), "EX030+10;")
+    func testEncodeBands_maxCut() {
+        // −24 dB → raw 30 → "30" × 18
+        let cut = Array(repeating: -24, count: 18)
+        XCTAssertEqual(KenwoodCAT.encodeBands(cut), String(repeating: "30", count: 18))
     }
 
-    func testSetEQGain_clampsBelow20() {
-        XCTAssertEqual(KenwoodCAT.setEQGain(30, dB: -21), "EX030-20;")
+    func testDecodeBands_roundTrip() {
+        let original = [6, 3, 0, -3, -6, -12, -24, 6, 0, -6, 3, -3, 0, 6, -24, 0, 0, 0]
+        XCTAssertEqual(KenwoodCAT.decodeBands(KenwoodCAT.encodeBands(original)), original)
+    }
+
+    func testDecodeBands_invalidLength_returnsNil() {
+        XCTAssertNil(KenwoodCAT.decodeBands("0606"))
     }
 
     // MARK: - Memory Channel
@@ -322,5 +339,530 @@ final class KenwoodCATTests: XCTestCase {
         XCTAssertEqual(KenwoodCAT.setOperatingMode(.am),  "OM05;")
         XCTAssertEqual(KenwoodCAT.setOperatingMode(.fsk), "OM06;")
         XCTAssertEqual(KenwoodCAT.setOperatingMode(.cwR), "OM07;")
+    }
+
+    // MARK: - Auto Information (AI)
+
+    func testSetAutoInformation_allModes() {
+        XCTAssertEqual(KenwoodCAT.setAutoInformation(.off),            "AI0;")
+        XCTAssertEqual(KenwoodCAT.setAutoInformation(.onNonPersistent),"AI2;")
+        XCTAssertEqual(KenwoodCAT.setAutoInformation(.onPersistent),   "AI4;")
+    }
+
+    // MARK: - VoIP Levels (##KN3)
+
+    func testGetVoipInputLevel() {
+        XCTAssertEqual(KenwoodCAT.getVoipInputLevel(),  "##KN30;")
+    }
+
+    func testGetVoipOutputLevel() {
+        XCTAssertEqual(KenwoodCAT.getVoipOutputLevel(), "##KN31;")
+    }
+
+    func testSetVoipInputLevel_typical() {
+        XCTAssertEqual(KenwoodCAT.setVoipInputLevel(50),  "##KN30050;")
+        XCTAssertEqual(KenwoodCAT.setVoipInputLevel(0),   "##KN30000;")
+        XCTAssertEqual(KenwoodCAT.setVoipInputLevel(100), "##KN30100;")
+    }
+
+    func testSetVoipInputLevel_clamping() {
+        XCTAssertEqual(KenwoodCAT.setVoipInputLevel(-1),  "##KN30000;")
+        XCTAssertEqual(KenwoodCAT.setVoipInputLevel(101), "##KN30100;")
+    }
+
+    func testSetVoipOutputLevel_typical() {
+        XCTAssertEqual(KenwoodCAT.setVoipOutputLevel(75), "##KN31075;")
+    }
+
+    func testSetVoipOutputLevel_clamping() {
+        XCTAssertEqual(KenwoodCAT.setVoipOutputLevel(-5),  "##KN31000;")
+        XCTAssertEqual(KenwoodCAT.setVoipOutputLevel(200), "##KN31100;")
+    }
+
+    // MARK: - AF Gain query
+
+    func testGetAFGain() {
+        XCTAssertEqual(KenwoodCAT.getAFGain(), "AG;")
+    }
+
+    // MARK: - Noise Reduction (NR)
+
+    func testGetNoiseReduction() {
+        XCTAssertEqual(KenwoodCAT.getNoiseReduction(), "NR;")
+    }
+
+    func testSetNoiseReduction_allModes() {
+        XCTAssertEqual(KenwoodCAT.setNoiseReduction(.off), "NR0;")
+        XCTAssertEqual(KenwoodCAT.setNoiseReduction(.nr1), "NR1;")
+        XCTAssertEqual(KenwoodCAT.setNoiseReduction(.nr2), "NR2;")
+    }
+
+    func testNoiseReductionMode_labels() {
+        XCTAssertEqual(KenwoodCAT.NoiseReductionMode.off.label, "Off")
+        XCTAssertEqual(KenwoodCAT.NoiseReductionMode.nr1.label, "NR1")
+        XCTAssertEqual(KenwoodCAT.NoiseReductionMode.nr2.label, "NR2")
+    }
+
+    // MARK: - Notch (NT)
+
+    func testGetNotch() {
+        XCTAssertEqual(KenwoodCAT.getNotch(), "NT;")
+    }
+
+    func testSetNotch_on() {
+        XCTAssertEqual(KenwoodCAT.setNotch(enabled: true),  "NT1;")
+    }
+
+    func testSetNotch_off() {
+        XCTAssertEqual(KenwoodCAT.setNotch(enabled: false), "NT0;")
+    }
+
+    // MARK: - Squelch (SQ)
+
+    func testGetSquelchLevel() {
+        XCTAssertEqual(KenwoodCAT.getSquelchLevel(), "SQ;")
+    }
+
+    func testSetSquelchLevel_typical() {
+        XCTAssertEqual(KenwoodCAT.setSquelchLevel(0),   "SQ000;")
+        XCTAssertEqual(KenwoodCAT.setSquelchLevel(128), "SQ128;")
+        XCTAssertEqual(KenwoodCAT.setSquelchLevel(255), "SQ255;")
+    }
+
+    func testSetSquelchLevel_clamping() {
+        XCTAssertEqual(KenwoodCAT.setSquelchLevel(-1),  "SQ000;")
+        XCTAssertEqual(KenwoodCAT.setSquelchLevel(256), "SQ255;")
+    }
+
+    // MARK: - S-Meter query
+
+    func testGetSMeter() {
+        XCTAssertEqual(KenwoodCAT.getSMeter(), "SM;")
+    }
+
+    func testGetMeterValue_smeter() {
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.smeter),      "SM0;")
+    }
+
+    func testGetMeterValue_compression() {
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.compression), "SM1;")
+    }
+
+    func testGetMeterValue_alc() {
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.alc),         "SM2;")
+    }
+
+    func testGetMeterValue_swr() {
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.swr),         "SM3;")
+    }
+
+    func testGetMeterValue_power() {
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.power),       "SM5;")
+    }
+
+    func testGetMeterValue_none_returnsEmpty() {
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.none_), "")
+    }
+
+    func testMeterType_alc_formatValue() {
+        XCTAssertEqual(KenwoodCAT.MeterType.alc.formatValue(0),  "0%")
+        XCTAssertEqual(KenwoodCAT.MeterType.alc.formatValue(30), "100%")
+    }
+
+    func testMeterType_compression_formatValue() {
+        XCTAssertEqual(KenwoodCAT.MeterType.compression.formatValue(10), "10 dB")
+    }
+
+    // MARK: - RF Gain query
+
+    func testGetRFGain() {
+        XCTAssertEqual(KenwoodCAT.getRFGain(), "RG;")
+    }
+
+    // MARK: - VFO Selection (FR / FT)
+
+    func testGetReceiverVFO() {
+        XCTAssertEqual(KenwoodCAT.getReceiverVFO(), "FR;")
+    }
+
+    func testSetReceiverVFO() {
+        XCTAssertEqual(KenwoodCAT.setReceiverVFO(.a), "FR0;")
+        XCTAssertEqual(KenwoodCAT.setReceiverVFO(.b), "FR1;")
+    }
+
+    func testGetTransmitterVFO() {
+        XCTAssertEqual(KenwoodCAT.getTransmitterVFO(), "FT;")
+    }
+
+    func testSetTransmitterVFO() {
+        XCTAssertEqual(KenwoodCAT.setTransmitterVFO(.a), "FT0;")
+        XCTAssertEqual(KenwoodCAT.setTransmitterVFO(.b), "FT1;")
+    }
+
+    func testVFO_labels() {
+        XCTAssertEqual(KenwoodCAT.VFO.a.label, "VFO A")
+        XCTAssertEqual(KenwoodCAT.VFO.b.label, "VFO B")
+    }
+
+    // MARK: - RIT / XIT state commands
+
+    func testRitGetState() {
+        XCTAssertEqual(KenwoodCAT.ritGetState(), "RT;")
+    }
+
+    func testRitSetEnabled() {
+        XCTAssertEqual(KenwoodCAT.ritSetEnabled(true),  "RT1;")
+        XCTAssertEqual(KenwoodCAT.ritSetEnabled(false), "RT0;")
+    }
+
+    func testXitGetState() {
+        XCTAssertEqual(KenwoodCAT.xitGetState(), "XT;")
+    }
+
+    func testXitSetEnabled() {
+        XCTAssertEqual(KenwoodCAT.xitSetEnabled(true),  "XT1;")
+        XCTAssertEqual(KenwoodCAT.xitSetEnabled(false), "XT0;")
+    }
+
+    func testRitXitClearOffset() {
+        XCTAssertEqual(KenwoodCAT.ritXitClearOffset(), "RC;")
+    }
+
+    func testRitXitGetOffset() {
+        XCTAssertEqual(KenwoodCAT.ritXitGetOffset(), "RF;")
+    }
+
+    func testRitXitStepUp() {
+        XCTAssertEqual(KenwoodCAT.ritXitStepUp(), "RU;")
+    }
+
+    func testRitXitStepDown() {
+        XCTAssertEqual(KenwoodCAT.ritXitStepDown(), "RD;")
+    }
+
+    // MARK: - RX Filter Low/High Cut (SL / SH)
+
+    func testGetReceiveFilterLowCutSettingID() {
+        XCTAssertEqual(KenwoodCAT.getReceiveFilterLowCutSettingID(), "SL0;")
+    }
+
+    func testSetReceiveFilterLowCutSettingID_typical() {
+        XCTAssertEqual(KenwoodCAT.setReceiveFilterLowCutSettingID(5),  "SL005;")
+        XCTAssertEqual(KenwoodCAT.setReceiveFilterLowCutSettingID(0),  "SL000;")
+        XCTAssertEqual(KenwoodCAT.setReceiveFilterLowCutSettingID(99), "SL099;")
+    }
+
+    func testSetReceiveFilterLowCutSettingID_clamping() {
+        XCTAssertEqual(KenwoodCAT.setReceiveFilterLowCutSettingID(-1),  "SL000;")
+        XCTAssertEqual(KenwoodCAT.setReceiveFilterLowCutSettingID(100), "SL099;")
+    }
+
+    func testGetReceiveFilterHighCutSettingID() {
+        XCTAssertEqual(KenwoodCAT.getReceiveFilterHighCutSettingID(), "SH0;")
+    }
+
+    func testSetReceiveFilterHighCutSettingID_typical() {
+        XCTAssertEqual(KenwoodCAT.setReceiveFilterHighCutSettingID(10),  "SH0010;")
+        XCTAssertEqual(KenwoodCAT.setReceiveFilterHighCutSettingID(999), "SH0999;")
+    }
+
+    func testSetReceiveFilterHighCutSettingID_clamping() {
+        XCTAssertEqual(KenwoodCAT.setReceiveFilterHighCutSettingID(-1),   "SH0000;")
+        XCTAssertEqual(KenwoodCAT.setReceiveFilterHighCutSettingID(1000), "SH0999;")
+    }
+
+    func testGetReceiveFilterShift() {
+        XCTAssertEqual(KenwoodCAT.getReceiveFilterShift(), "IS;")
+    }
+
+    // MARK: - Antenna Tuner (AC)
+
+    func testGetAntennaTuner() {
+        XCTAssertEqual(KenwoodCAT.getAntennaTuner(), "AC;")
+    }
+
+    func testSetAntennaTuner_txEnabled() {
+        XCTAssertEqual(KenwoodCAT.setAntennaTuner(txEnabled: true),  "AC110;")
+    }
+
+    func testSetAntennaTuner_txDisabled() {
+        XCTAssertEqual(KenwoodCAT.setAntennaTuner(txEnabled: false), "AC100;")
+    }
+
+    func testStartAntennaTuning() {
+        XCTAssertEqual(KenwoodCAT.startAntennaTuning(), "AC111;")
+    }
+
+    func testStopAntennaTuning_txEnabled() {
+        XCTAssertEqual(KenwoodCAT.stopAntennaTuning(txEnabled: true),  "AC110;")
+    }
+
+    func testStopAntennaTuning_txDisabled() {
+        XCTAssertEqual(KenwoodCAT.stopAntennaTuning(txEnabled: false), "AC100;")
+    }
+
+    // MARK: - Split Offset (SP)
+
+    func testGetSplitOffsetSettingState() {
+        XCTAssertEqual(KenwoodCAT.getSplitOffsetSettingState(), "SP;")
+    }
+
+    func testStartSplitOffsetSetting() {
+        XCTAssertEqual(KenwoodCAT.startSplitOffsetSetting(), "SP1;")
+    }
+
+    func testCancelSplitOffsetSetting() {
+        XCTAssertEqual(KenwoodCAT.cancelSplitOffsetSetting(), "SP2;")
+    }
+
+    func testSetSplitOffset_plus() {
+        XCTAssertEqual(KenwoodCAT.setSplitOffset(plus: true,  khz: 5), "SP005;")
+    }
+
+    func testSetSplitOffset_minus() {
+        XCTAssertEqual(KenwoodCAT.setSplitOffset(plus: false, khz: 3), "SP013;")
+    }
+
+    func testSetSplitOffset_clampsKhz() {
+        XCTAssertEqual(KenwoodCAT.setSplitOffset(plus: true, khz: 0), "SP001;")  // min 1
+        XCTAssertEqual(KenwoodCAT.setSplitOffset(plus: true, khz: 99), "SP009;") // max 9
+    }
+
+    // MARK: - Memory Mode (MV)
+
+    func testGetMemoryMode() {
+        XCTAssertEqual(KenwoodCAT.getMemoryMode(), "MV;;")
+    }
+
+    func testSetMemoryMode_enabled() {
+        XCTAssertEqual(KenwoodCAT.setMemoryMode(true),  "MV1;;")
+    }
+
+    func testSetMemoryMode_disabled() {
+        XCTAssertEqual(KenwoodCAT.setMemoryMode(false), "MV0;;")
+    }
+
+    // MARK: - Memory Channel (MN / MA)
+
+    func testGetMemoryChannelNumber() {
+        XCTAssertEqual(KenwoodCAT.getMemoryChannelNumber(), "MN;")
+    }
+
+    func testGetMemoryChannelConfiguration_typical() {
+        XCTAssertEqual(KenwoodCAT.getMemoryChannelConfiguration(5),   "MA0005;")
+        XCTAssertEqual(KenwoodCAT.getMemoryChannelConfiguration(119), "MA0119;")
+    }
+
+    func testGetMemoryChannelConfiguration_clamping() {
+        XCTAssertEqual(KenwoodCAT.getMemoryChannelConfiguration(-1),  "MA0000;")
+        XCTAssertEqual(KenwoodCAT.getMemoryChannelConfiguration(120), "MA0119;")
+    }
+
+    func testSetMemoryChannelDirectWriteFrequencyHz_usb() {
+        let cmd = KenwoodCAT.setMemoryChannelDirectWriteFrequencyHz(14_225_000, mode: .usb, fmNarrow: false)
+        XCTAssertEqual(cmd, "MA10001422500020;")
+    }
+
+    func testSetMemoryChannelDirectWriteFrequencyHz_fmNarrow() {
+        let cmd = KenwoodCAT.setMemoryChannelDirectWriteFrequencyHz(146_520_000, mode: .fm, fmNarrow: true)
+        XCTAssertEqual(cmd, "MA10014652000041;")
+    }
+
+    // MARK: - Extended Menu (EX)
+
+    func testGetMenuValue() {
+        XCTAssertEqual(KenwoodCAT.getMenuValue(30), "EX00030;")
+        XCTAssertEqual(KenwoodCAT.getMenuValue(62), "EX00062;")
+    }
+
+    func testSetMenuValue() {
+        XCTAssertEqual(KenwoodCAT.setMenuValue(30, value: 5), "EX00030 005;")
+    }
+
+    // MARK: - UT/UR EQ commands
+
+    func testGetTXEQ_command() {
+        XCTAssertEqual(KenwoodCAT.getTXEQ(), "UT;")
+    }
+
+    func testGetRXEQ_command() {
+        XCTAssertEqual(KenwoodCAT.getRXEQ(), "UR;")
+    }
+
+    func testSetTXEQ_producesCorrectFormat() {
+        let flat = Array(repeating: 0, count: 18)
+        let cmd = KenwoodCAT.setTXEQ(flat)
+        XCTAssertTrue(cmd.hasPrefix("UT"), "TX EQ set command must start with UT")
+        XCTAssertTrue(cmd.hasSuffix(";"))
+        XCTAssertEqual(cmd.count, 39, "UT + 36 digits + semicolon")
+    }
+
+    func testSetRXEQ_producesCorrectFormat() {
+        let flat = Array(repeating: 0, count: 18)
+        let cmd = KenwoodCAT.setRXEQ(flat)
+        XCTAssertTrue(cmd.hasPrefix("UR"), "RX EQ set command must start with UR")
+        XCTAssertEqual(cmd.count, 39)
+    }
+
+    func testGetTXEQPreset_command() {
+        XCTAssertEqual(KenwoodCAT.getTXEQPreset(), "EQT0;")
+    }
+
+    func testGetRXEQPreset_command() {
+        XCTAssertEqual(KenwoodCAT.getRXEQPreset(), "EQR0;")
+    }
+
+    func testSetTXEQPreset_command() {
+        XCTAssertEqual(KenwoodCAT.setTXEQPreset(.highBoost1),   "EQT10;")
+        XCTAssertEqual(KenwoodCAT.setTXEQPreset(.conventional), "EQT15;")
+        XCTAssertEqual(KenwoodCAT.setTXEQPreset(.user1),        "EQT16;")
+    }
+
+    func testSetRXEQPreset_command() {
+        XCTAssertEqual(KenwoodCAT.setRXEQPreset(.formantPass), "EQR12;")
+        XCTAssertEqual(KenwoodCAT.setRXEQPreset(.user3),       "EQR18;")
+    }
+
+    func testEQPreset_isFactory() {
+        XCTAssertTrue(KenwoodCAT.EQPreset.highBoost1.isFactory)
+        XCTAssertTrue(KenwoodCAT.EQPreset.conventional.isFactory)
+        XCTAssertFalse(KenwoodCAT.EQPreset.user1.isFactory)
+        XCTAssertFalse(KenwoodCAT.EQPreset.user3.isFactory)
+    }
+
+    // MARK: - Beat Cancel query
+
+    func testGetBeatCancel() {
+        XCTAssertEqual(KenwoodCAT.getBeatCancel(), "BC;")
+    }
+
+    // MARK: - Mic Gain (MG)
+
+    func testGetMicGain() {
+        XCTAssertEqual(KenwoodCAT.getMicGain(), "MG;")
+    }
+
+    func testSetMicGain_typical() {
+        XCTAssertEqual(KenwoodCAT.setMicGain(50),  "MG0050;")
+        XCTAssertEqual(KenwoodCAT.setMicGain(0),   "MG0000;")
+        XCTAssertEqual(KenwoodCAT.setMicGain(100), "MG0100;")
+    }
+
+    func testSetMicGain_clamping() {
+        XCTAssertEqual(KenwoodCAT.setMicGain(-1),  "MG0000;")
+        XCTAssertEqual(KenwoodCAT.setMicGain(101), "MG0100;")
+    }
+
+    // MARK: - VOX (VX)
+
+    func testGetVOX() {
+        XCTAssertEqual(KenwoodCAT.getVOX(), "VX;")
+    }
+
+    func testSetVOX_on() {
+        XCTAssertEqual(KenwoodCAT.setVOX(enabled: true),  "VX1;")
+    }
+
+    func testSetVOX_off() {
+        XCTAssertEqual(KenwoodCAT.setVOX(enabled: false), "VX0;")
+    }
+
+    // MARK: - Monitor Level (ML)
+
+    func testGetMonitorLevel() {
+        XCTAssertEqual(KenwoodCAT.getMonitorLevel(), "ML;")
+    }
+
+    func testSetMonitorLevel_typical() {
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(0),   "ML000;")
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(50),  "ML050;")
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(100), "ML100;")
+    }
+
+    func testSetMonitorLevel_clamping() {
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(-1),  "ML000;")
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(101), "ML100;")
+    }
+
+    // MARK: - Speech Processor (PR)
+
+    func testGetSpeechProc() {
+        XCTAssertEqual(KenwoodCAT.getSpeechProc(), "PR;")
+    }
+
+    func testSetSpeechProc_on() {
+        XCTAssertEqual(KenwoodCAT.setSpeechProc(enabled: true),  "PR1;")
+    }
+
+    func testSetSpeechProc_off() {
+        XCTAssertEqual(KenwoodCAT.setSpeechProc(enabled: false), "PR0;")
+    }
+
+    // MARK: - CW Break-in (BI)
+
+    func testGetCWBreakIn() {
+        XCTAssertEqual(KenwoodCAT.getCWBreakIn(), "BI;")
+    }
+
+    func testSetCWBreakIn_allModes() {
+        XCTAssertEqual(KenwoodCAT.setCWBreakIn(.off),  "BI0;")
+        XCTAssertEqual(KenwoodCAT.setCWBreakIn(.semi), "BI1;")
+        XCTAssertEqual(KenwoodCAT.setCWBreakIn(.full), "BI2;")
+    }
+
+    func testCWBreakInMode_nextCycles() {
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.off.next,  .semi)
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.semi.next, .full)
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.full.next, .off)
+    }
+
+    func testCWBreakInMode_labels() {
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.off.label,  "Off")
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.semi.label, "Semi")
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.full.label, "Full")
+    }
+
+    // MARK: - CW Speed query
+
+    func testGetCWSpeed() {
+        XCTAssertEqual(KenwoodCAT.getCWSpeed(), "KS;")
+    }
+
+    // MARK: - FreeDV mode configuration
+
+    func testConfigureForFreeDVLan() {
+        XCTAssertEqual(KenwoodCAT.configureForFreeDVLan(), ["OM0D;", "MS002;"])
+    }
+
+    func testConfigureForFreeDVUsb() {
+        XCTAssertEqual(KenwoodCAT.configureForFreeDVUsb(), ["OM0D;", "MS003;"])
+    }
+
+    func testRevertFromFreeDV_defaultMode() {
+        XCTAssertEqual(KenwoodCAT.revertFromFreeDV(), ["OM02;", "MS001;"])
+    }
+
+    func testRevertFromFreeDV_customPreviousMode() {
+        XCTAssertEqual(KenwoodCAT.revertFromFreeDV(previousMode: "OM03;"), ["OM03;", "MS001;"])
+    }
+
+    // MARK: - MD / DA commands
+
+    func testGetModeMD() {
+        XCTAssertEqual(KenwoodCAT.getModeMD(), "MD;")
+    }
+
+    func testSetModeMD() {
+        XCTAssertEqual(KenwoodCAT.setModeMD(2), "MD2;")
+        XCTAssertEqual(KenwoodCAT.setModeMD(0), "MD0;")
+    }
+
+    func testGetDataMode() {
+        XCTAssertEqual(KenwoodCAT.getDataMode(), "DA;")
+    }
+
+    func testSetDataMode() {
+        XCTAssertEqual(KenwoodCAT.setDataMode(enabled: true),  "DA1;")
+        XCTAssertEqual(KenwoodCAT.setDataMode(enabled: false), "DA0;")
     }
 }

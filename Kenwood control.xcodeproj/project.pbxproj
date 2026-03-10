@@ -12,13 +12,21 @@
 			containerPortal = 7FCA46A82F3D39560045FEBD /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 7FCA46AF2F3D39560045FEBD;
-			remoteInfo = "Kenwood control";
+			remoteInfo = "TS-890 Pro";
+		};
+		CCDDEE062F3D39560045FEBD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7FCA46A82F3D39560045FEBD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 7FCA46AF2F3D39560045FEBD;
+			remoteInfo = "TS-890 Pro";
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		7FCA46B02F3D39560045FEBD /* Kenwood control.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Kenwood control.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		AABBCC012F3D39560045FEBD /* Kenwood controlTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Kenwood controlTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		7FCA46B02F3D39560045FEBD /* TS-890 Pro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "TS-890 Pro.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AABBCC012F3D39560045FEBD /* TS-890 ProTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "TS-890 ProTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		CCDDEE012F3D39560045FEBD /* TS-890 ProUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "TS-890 ProUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -41,12 +49,12 @@
 				ft8_lib/ft4_ft8_public/nonstd_to_c58.f90,
 				ft8_lib/ft4_ft8_public/std_call_to_c28.f90,
 			);
-			target = 7FCA46AF2F3D39560045FEBD /* Kenwood control */;
+			target = 7FCA46AF2F3D39560045FEBD /* TS-890 Pro */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		7FCA46B22F3D39560045FEBD /* Kenwood control */ = {
+		7FCA46B22F3D39560045FEBD /* TS-890 Pro */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Kenwood control";
 			sourceTree = "<group>";
@@ -59,9 +67,14 @@
 			path = ThirdParty;
 			sourceTree = "<group>";
 		};
-		AABBCC022F3D39560045FEBD /* Kenwood controlTests */ = {
+		AABBCC022F3D39560045FEBD /* TS-890 ProTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Kenwood controlTests";
+			sourceTree = "<group>";
+		};
+		CCDDEE022F3D39560045FEBD /* TS-890 ProUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Kenwood controlUITests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -81,15 +94,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CCDDEE032F3D39560045FEBD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		7FCA46A72F3D39560045FEBD = {
 			isa = PBXGroup;
 			children = (
-				7FCA46B22F3D39560045FEBD /* Kenwood control */,
+				7FCA46B22F3D39560045FEBD /* TS-890 Pro */,
 				944F4A1F3F28484AA2A8202A /* ThirdParty */,
-				AABBCC022F3D39560045FEBD /* Kenwood controlTests */,
+				AABBCC022F3D39560045FEBD /* TS-890 ProTests */,
+				CCDDEE022F3D39560045FEBD /* TS-890 ProUITests */,
 				7FCA46B12F3D39560045FEBD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -97,8 +118,9 @@
 		7FCA46B12F3D39560045FEBD /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				7FCA46B02F3D39560045FEBD /* Kenwood control.app */,
-				AABBCC012F3D39560045FEBD /* Kenwood controlTests.xctest */,
+				7FCA46B02F3D39560045FEBD /* TS-890 Pro.app */,
+				AABBCC012F3D39560045FEBD /* TS-890 ProTests.xctest */,
+				CCDDEE012F3D39560045FEBD /* TS-890 ProUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -106,7 +128,7 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		7FCA46AF2F3D39560045FEBD /* Kenwood control */ = {
+		7FCA46AF2F3D39560045FEBD /* TS-890 Pro */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 7FCA46BB2F3D39570045FEBD /* Build configuration list for PBXNativeTarget "Kenwood control" */;
 			buildPhases = (
@@ -119,17 +141,17 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				7FCA46B22F3D39560045FEBD /* Kenwood control */,
+				7FCA46B22F3D39560045FEBD /* TS-890 Pro */,
 				944F4A1F3F28484AA2A8202A /* ThirdParty */,
 			);
-			name = "Kenwood control";
+			name = "TS-890 Pro";
 			packageProductDependencies = (
 			);
-			productName = "Kenwood control";
-			productReference = 7FCA46B02F3D39560045FEBD /* Kenwood control.app */;
+			productName = "TS-890 Pro";
+			productReference = 7FCA46B02F3D39560045FEBD /* TS-890 Pro.app */;
 			productType = "com.apple.product-type.application";
 		};
-		AABBCC052F3D39560045FEBD /* Kenwood controlTests */ = {
+		AABBCC052F3D39560045FEBD /* TS-890 ProTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AABBCC0A2F3D39570045FEBD /* Build configuration list for PBXNativeTarget "Kenwood controlTests" */;
 			buildPhases = (
@@ -142,12 +164,32 @@
 				AABBCC072F3D39560045FEBD /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				AABBCC022F3D39560045FEBD /* Kenwood controlTests */,
+				AABBCC022F3D39560045FEBD /* TS-890 ProTests */,
 			);
-			name = "Kenwood controlTests";
-			productName = "Kenwood controlTests";
-			productReference = AABBCC012F3D39560045FEBD /* Kenwood controlTests.xctest */;
+			name = "TS-890 ProTests";
+			productName = "TS-890 ProTests";
+			productReference = AABBCC012F3D39560045FEBD /* TS-890 ProTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		CCDDEE052F3D39560045FEBD /* TS-890 ProUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CCDDEE0A2F3D39570045FEBD /* Build configuration list for PBXNativeTarget "Kenwood controlUITests" */;
+			buildPhases = (
+				CCDDEE042F3D39560045FEBD /* Sources */,
+				CCDDEE032F3D39560045FEBD /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				CCDDEE072F3D39560045FEBD /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				CCDDEE022F3D39560045FEBD /* TS-890 ProUITests */,
+			);
+			name = "TS-890 ProUITests";
+			productName = "TS-890 ProUITests";
+			productReference = CCDDEE012F3D39560045FEBD /* TS-890 ProUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -163,6 +205,10 @@
 						CreatedOnToolsVersion = 26.3;
 					};
 					AABBCC052F3D39560045FEBD = {
+						CreatedOnToolsVersion = 26.3;
+						TestTargetID = 7FCA46AF2F3D39560045FEBD;
+					};
+					CCDDEE052F3D39560045FEBD = {
 						CreatedOnToolsVersion = 26.3;
 						TestTargetID = 7FCA46AF2F3D39560045FEBD;
 					};
@@ -182,8 +228,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				7FCA46AF2F3D39560045FEBD /* Kenwood control */,
-				AABBCC052F3D39560045FEBD /* Kenwood controlTests */,
+				7FCA46AF2F3D39560045FEBD /* TS-890 Pro */,
+				AABBCC052F3D39560045FEBD /* TS-890 ProTests */,
+				CCDDEE052F3D39560045FEBD /* TS-890 ProUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -230,13 +277,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CCDDEE042F3D39560045FEBD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
 		AABBCC072F3D39560045FEBD /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 7FCA46AF2F3D39560045FEBD /* Kenwood control */;
+			target = 7FCA46AF2F3D39560045FEBD /* TS-890 Pro */;
 			targetProxy = AABBCC062F3D39560045FEBD /* PBXContainerItemProxy */;
+		};
+		CCDDEE072F3D39560045FEBD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 7FCA46AF2F3D39560045FEBD /* TS-890 Pro */;
+			targetProxy = CCDDEE062F3D39560045FEBD /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -351,7 +410,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
@@ -372,16 +431,19 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 					GENERATE_INFOPLIST_FILE = YES;
+					INFOPLIST_FILE = "Kenwood control/Info.plist";
 					INFOPLIST_KEY_CFBundleDisplayName = "TS-890 Pro";
+					INFOPLIST_KEY_CFBundleName = "TS-890 Pro";
 					INFOPLIST_KEY_NSHumanReadableCopyright = "";
-					INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Kenwood Control connects to your TS-890S radio on your local network.";
-					INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kenwood Control needs access to audio input to process RX audio.";
+					INFOPLIST_KEY_NSLocalNetworkUsageDescription = "TS-890 Pro connects to your TS-890S radio on your local network.";
+					INFOPLIST_KEY_NSMicrophoneUsageDescription = "TS-890 Pro needs access to audio input to process RX audio.";
 					LD_RUNPATH_SEARCH_PATHS = (
 						"$(inherited)",
 						"@executable_path/../Frameworks",
 					);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "personal.Kenwood-control";
+				PRODUCT_MODULE_NAME = Kenwood_control;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -396,6 +458,7 @@
 					"$(PROJECT_DIR)/ThirdParty/rnnoise/src",
 					"$(PROJECT_DIR)/ThirdParty/wdsp",
 					"$(PROJECT_DIR)/ThirdParty/ft8_lib",
+					"$(PROJECT_DIR)/ThirdParty/codec2/src",
 					"/opt/homebrew/include",
 					"$(inherited)",
 				);
@@ -419,16 +482,19 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 					GENERATE_INFOPLIST_FILE = YES;
+					INFOPLIST_FILE = "Kenwood control/Info.plist";
 					INFOPLIST_KEY_CFBundleDisplayName = "TS-890 Pro";
+					INFOPLIST_KEY_CFBundleName = "TS-890 Pro";
 					INFOPLIST_KEY_NSHumanReadableCopyright = "";
-					INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Kenwood Control connects to your TS-890S radio on your local network.";
-					INFOPLIST_KEY_NSMicrophoneUsageDescription = "Kenwood Control needs access to audio input to process RX audio.";
+					INFOPLIST_KEY_NSLocalNetworkUsageDescription = "TS-890 Pro connects to your TS-890S radio on your local network.";
+					INFOPLIST_KEY_NSMicrophoneUsageDescription = "TS-890 Pro needs access to audio input to process RX audio.";
 					LD_RUNPATH_SEARCH_PATHS = (
 						"$(inherited)",
 						"@executable_path/../Frameworks",
 					);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "personal.Kenwood-control";
+				PRODUCT_MODULE_NAME = Kenwood_control;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -443,6 +509,7 @@
 					"$(PROJECT_DIR)/ThirdParty/rnnoise/src",
 					"$(PROJECT_DIR)/ThirdParty/wdsp",
 					"$(PROJECT_DIR)/ThirdParty/ft8_lib",
+					"$(PROJECT_DIR)/ThirdParty/codec2/src",
 					"/opt/homebrew/include",
 					"$(inherited)",
 				);
@@ -474,7 +541,7 @@
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kenwood control.app/Contents/MacOS/Kenwood control";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TS-890 Pro.app/Contents/MacOS/TS-890 Pro";
 			};
 			name = Debug;
 		};
@@ -499,7 +566,55 @@
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Kenwood control.app/Contents/MacOS/Kenwood control";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/TS-890 Pro.app/Contents/MacOS/TS-890 Pro";
+			};
+			name = Release;
+		};
+		CCDDEE082F3D39570045FEBD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "personal.Kenwood-control-uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = "TS-890 Pro";
+			};
+			name = Debug;
+		};
+		CCDDEE092F3D39570045FEBD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "personal.Kenwood-control-uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_TARGET_NAME = "TS-890 Pro";
 			};
 			name = Release;
 		};
@@ -529,6 +644,15 @@
 			buildConfigurations = (
 				AABBCC082F3D39570045FEBD /* Debug */,
 				AABBCC092F3D39570045FEBD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CCDDEE0A2F3D39570045FEBD /* Build configuration list for PBXNativeTarget "Kenwood controlUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CCDDEE082F3D39570045FEBD /* Debug */,
+				CCDDEE092F3D39570045FEBD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

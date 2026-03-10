@@ -7,41 +7,42 @@
 //
 
 import SwiftUI
-import Combine
+import Observation
 import Foundation
 import AppKit
 
-final class FT8ViewModel: ObservableObject {
-    @Published var isAutoReplyEnabled: Bool = false
-    @Published var simulateDecodedText: String = ""
-    @Published var decodedMessages: [DecodedMessage] = []
-    @Published var holdDecodedListUpdates: Bool = true
-    @Published var pendingDecodedMessagesCount: Int = 0
-    @Published var activityLog: [String] = []
-    @Published var verboseFT8Logging: Bool = false
-    @Published var lastTxSummary: String = "No FT8 transmit yet."
-    @Published var txText: String = ""
-    @Published var plannedTxText: String = ""
-    @Published var isFT8Running: Bool = false
-    @Published var preFT8Summary: String = ""
-    @Published var isCQRunning: Bool = false
-    @Published var cqParityRaw: String = "Even"
-    @Published var isTxArmed: Bool = false
-    @Published var nextCQTxAt: Date?
+@Observable
+final class FT8ViewModel {
+    var isAutoReplyEnabled: Bool = false
+    var simulateDecodedText: String = ""
+    var decodedMessages: [DecodedMessage] = []
+    var holdDecodedListUpdates: Bool = true
+    var pendingDecodedMessagesCount: Int = 0
+    var activityLog: [String] = []
+    var verboseFT8Logging: Bool = false
+    var lastTxSummary: String = "No FT8 transmit yet."
+    var txText: String = ""
+    var plannedTxText: String = ""
+    var isFT8Running: Bool = false
+    var preFT8Summary: String = ""
+    var isCQRunning: Bool = false
+    var cqParityRaw: String = "Even"
+    var isTxArmed: Bool = false
+    var nextCQTxAt: Date?
 
     private var cqTimer: DispatchSourceTimer?
 
     // RX capture (decode not implemented yet).
-    @Published var isRxCaptureEnabled: Bool = false
-    @Published var rxLevelDbFS: Double = -120.0
-    @Published var rxBufferedSeconds: Double = 0.0
-    @Published var lastSavedWavPath: String = ""
-    @Published var isDecoding: Bool = false
-    @Published var lastDecodeSummary: String = ""
-    @Published var isAutoDecodeEnabled: Bool = false
-    @Published var selectedProtocol: FT8Protocol = .ft8
-    @Published var queuedTarget: String?
-    @Published var txAmplitude: Float = 0.15 {
+    var isRxCaptureEnabled: Bool = false
+    var rxLevelDbFS: Double = -120.0
+    var rxBufferedSeconds: Double = 0.0
+    var lastSavedWavPath: String = ""
+    var isDecoding: Bool = false
+    var lastDecodeSummary: String = ""
+    var isAutoDecodeEnabled: Bool = false
+    var selectedProtocol: FT8Protocol = .ft8
+    var queuedTarget: String?
+    var txAmplitude: Float = 0.15 {
         didSet { UserDefaults.standard.set(txAmplitude, forKey: "FT8.TxAmplitude") }
     }
 
@@ -202,11 +203,14 @@ final class FT8ViewModel: ObservableObject {
     }
 
     /// Infer which TX parity (even/odd) is opposite to the slot the decoded station used.
-    /// FT8 decodes fire ~0.6 s after the slot boundary; subtracting 0.5 s lands us safely
-    /// inside the slot that just ended.
+    /// FT8 decodes fire ~0.6 s after the slot boundary. Subtracting 7.5 s (half a slot)
+    /// places us reliably in the middle of the 15 s slot that was just decoded, regardless
+    /// of whether the decode fires slightly early or late. The previous -0.5 s offset could
+    /// land right on the slot boundary and be attributed to the NEXT slot, causing the app
+    /// to reply on the SAME parity as the caller.
     func oppositeParityFor(_ msg: DecodedMessage) -> CQParity {
-        let slotEndApprox = msg.receivedAt.timeIntervalSince1970 - 0.5
-        let slotIndex = Int(slotEndApprox) % 60 / 15   // 0, 1, 2, 3
+        let midSlotApprox = msg.receivedAt.timeIntervalSince1970 - 7.5
+        let slotIndex = (Int(midSlotApprox) % 60 + 60) % 60 / 15   // 0, 1, 2, 3
         let theyUsedEvenSlot = (slotIndex % 2) == 0
         return theyUsedEvenSlot ? .odd : .even
     }
@@ -710,8 +714,9 @@ private struct FT8BandPreset: Identifiable, Hashable {
 
 struct FT8SectionView: View {
     let radio: RadioState
+    @Environment(\.dismiss) private var dismiss
 
-    @StateObject private var vm = FT8ViewModel()
+    @State private var vm = FT8ViewModel()
     @State private var showSettings: Bool = false
 
     @AppStorage("FT8.MyCallsign") private var myCallsign: String = ""
@@ -861,6 +866,11 @@ struct FT8SectionView: View {
             radio.onLanRxAudio48kMono = nil
             AppFileLogger.shared.log("FT8: removed RX audio tap")
         }
+        .background(
+            Button("") { dismiss() }
+                .keyboardShortcut("w", modifiers: .command)
+                .frame(width: 0, height: 0).opacity(0).accessibilityHidden(true)
+        )
     }
 
     private var selectedFrequencyHz: Int {
@@ -1062,7 +1072,7 @@ struct FT8SectionView: View {
 }
 
 private struct FT8SettingsSheet: View {
-    @ObservedObject var vm: FT8ViewModel
+    @Bindable var vm: FT8ViewModel
     @Binding var myCallsign: String
     @Binding var myGrid: String
     @Binding var myLocation: String

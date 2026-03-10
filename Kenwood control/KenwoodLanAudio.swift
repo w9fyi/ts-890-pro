@@ -44,6 +44,11 @@ struct RTPHeader {
 }
 
 final class KenwoodLanAudioReceiver {
+    // Swift 6.1 on macOS 26 routes deinit through swift_task_deinitOnExecutorImpl
+    // (isolated deinit) even for non-isolated classes, causing an invalid free in
+    // TaskLocal::StopLookupScope. nonisolated deinit opts out of that path.
+    nonisolated deinit {}
+
     enum ReceiverError: LocalizedError {
         case invalidHost
         case socketFailed(String)
@@ -65,6 +70,8 @@ final class KenwoodLanAudioReceiver {
 
     // Output is always 48 kHz mono float.
     var onAudio48kMono: (([Float]) -> Void)?
+    // Raw 16 kHz Int16 samples before upsampling — used by FreeDV modem decoder.
+    var onModemSamplesInt16: (([Int16]) -> Void)?
     // Per-packet diagnostics (seq/ssrc/payload bytes).
     var onPacket: ((UInt16, UInt32, Int) -> Void)?
 
@@ -288,13 +295,18 @@ final class KenwoodLanAudioReceiver {
             // Decode little-endian signed 16-bit PCM -> float [-1, 1]
             let sampleCount16k = 320
             var samples16k = [Float](repeating: 0, count: sampleCount16k)
+            var samplesInt16 = [Int16](repeating: 0, count: sampleCount16k)
             for i in 0..<sampleCount16k {
                 let lo = UInt16(base[payloadStart + i * 2])
                 let hi = UInt16(base[payloadStart + i * 2 + 1]) << 8
                 let u = lo | hi
                 let s = Int16(bitPattern: u)
+                samplesInt16[i] = s
                 samples16k[i] = Float(s) / 32768.0
             }
+
+            // Deliver raw Int16 to FreeDV modem decoder if active.
+            if let onModem = onModemSamplesInt16 { onModem(samplesInt16) }
 
             // Upsample 16 kHz -> 48 kHz (factor 3) with linear interpolation between samples.
             // We intentionally hold one sample between calls so the steady-state output is 960 samples/packet.

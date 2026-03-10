@@ -1,38 +1,28 @@
 import XCTest
-import Combine
 @testable import Kenwood_control
 
 /// Tests for RadioState digital mode configure / revert behaviour.
 ///
-/// No live radio or TCP connection is needed. RadioState.send() sets
-/// `lastTXFrame` synchronously before dispatching to the transport,
-/// so we can observe the CAT commands that would be sent by subscribing
-/// to `$lastTXFrame` via Combine.
+/// No live radio or TCP connection is needed. RadioState.send() appends
+/// every command to DiagnosticsStore.shared.txLog synchronously, so we
+/// can inspect exactly which CAT commands were sent and in what order.
 final class RadioStateDigitalModeTests: XCTestCase {
 
     var radio: RadioState!
-    var sentCommands: [String] = []
-    var cancellables = Set<AnyCancellable>()
 
     override func setUp() {
         super.setUp()
         radio = RadioState()
-        sentCommands = []
-        // $lastTXFrame emits the current value immediately on subscribe (dropFirst skips it),
-        // then emits synchronously on each subsequent assignment in send().
-        radio.$lastTXFrame
-            .dropFirst()
-            .filter { !$0.isEmpty }
-            .sink { [weak self] cmd in self?.sentCommands.append(cmd) }
-            .store(in: &cancellables)
+        DiagnosticsStore.shared.txLog = []
     }
 
     override func tearDown() {
-        cancellables.removeAll()
         radio = nil
-        sentCommands = []
+        DiagnosticsStore.shared.txLog = []
         super.tearDown()
     }
+
+    private var sentCommands: [String] { DiagnosticsStore.shared.txLog }
 
     // MARK: - Initial state
 
@@ -79,7 +69,7 @@ final class RadioStateDigitalModeTests: XCTestCase {
 
     func testRevert_sendsMicrophoneSourceCommand() {
         radio.configureForDigitalMode()
-        sentCommands.removeAll()
+        DiagnosticsStore.shared.txLog = []
 
         radio.revertFromDigitalMode()
         XCTAssertTrue(sentCommands.contains("MS001;"),
@@ -89,7 +79,7 @@ final class RadioStateDigitalModeTests: XCTestCase {
     func testRevert_withNoPreviousMode_defaultsToUSB() {
         // operatingMode is nil at startup — revert should default to USB (OM02;)
         radio.configureForDigitalMode()
-        sentCommands.removeAll()
+        DiagnosticsStore.shared.txLog = []
 
         radio.revertFromDigitalMode()
         XCTAssertTrue(sentCommands.contains("OM02;"),
@@ -101,7 +91,7 @@ final class RadioStateDigitalModeTests: XCTestCase {
         XCTAssertEqual(radio.operatingMode, .fm)
 
         radio.configureForDigitalMode()
-        sentCommands.removeAll()
+        DiagnosticsStore.shared.txLog = []
 
         radio.revertFromDigitalMode()
         XCTAssertTrue(sentCommands.contains("OM04;"),
@@ -111,7 +101,7 @@ final class RadioStateDigitalModeTests: XCTestCase {
     func testRevert_restoresPreviousOperatingMode_LSB() {
         radio.handleFrame("OM01;")   // LSB
         radio.configureForDigitalMode()
-        sentCommands.removeAll()
+        DiagnosticsStore.shared.txLog = []
 
         radio.revertFromDigitalMode()
         XCTAssertTrue(sentCommands.contains("OM01;"),
@@ -121,7 +111,7 @@ final class RadioStateDigitalModeTests: XCTestCase {
     func testRevert_restoresPreviousOperatingMode_CW() {
         radio.handleFrame("OM03;")   // CW
         radio.configureForDigitalMode()
-        sentCommands.removeAll()
+        DiagnosticsStore.shared.txLog = []
 
         radio.revertFromDigitalMode()
         XCTAssertTrue(sentCommands.contains("OM03;"),
@@ -144,7 +134,7 @@ final class RadioStateDigitalModeTests: XCTestCase {
         radio.configureForDigitalMode()
         XCTAssertTrue(radio.isConfiguredForDigitalMode)
 
-        sentCommands.removeAll()
+        DiagnosticsStore.shared.txLog = []
         radio.revertFromDigitalMode()
         XCTAssertFalse(radio.isConfiguredForDigitalMode)
         XCTAssertTrue(sentCommands.contains("OM04;"),
@@ -170,9 +160,119 @@ final class RadioStateDigitalModeTests: XCTestCase {
     func testRevertCATCommands_microphoneSourceIsMS001() {
         // MS: P1=0 (SEND/PTT), P2=1 (Front=Microphone), P3=0 (Rear=OFF)
         radio.configureForDigitalMode()
-        sentCommands.removeAll()
+        DiagnosticsStore.shared.txLog = []
         radio.revertFromDigitalMode()
         XCTAssertTrue(sentCommands.contains("MS001;"),
                       "Microphone source must be MS001 per TS-890S command reference")
+    }
+}
+
+// MARK: - User-interaction CAT command tests
+
+/// Tests that verify the correct CAT commands are sent when user-initiated
+/// actions (button presses, cycle controls) are invoked on RadioState.
+final class RadioStateUserActionTests: XCTestCase {
+
+    var radio: RadioState!
+    private var sentCommands: [String] { DiagnosticsStore.shared.txLog }
+
+    override func setUp() {
+        super.setUp()
+        radio = RadioState()
+        DiagnosticsStore.shared.txLog = []
+    }
+
+    override func tearDown() {
+        radio = nil
+        DiagnosticsStore.shared.txLog = []
+        super.tearDown()
+    }
+
+    // MARK: - Preamp cycle (PRE button)
+
+    func testCyclePreamp_fromOff_sendsPRE1() {
+        radio.handleFrame("PA0;")  // radio reports off
+        DiagnosticsStore.shared.txLog = []
+        radio.cyclePreampLevel()
+        XCTAssertTrue(sentCommands.contains("PA1;"), "Cycle from Off should send PA1; (PRE1), got \(sentCommands)")
+    }
+
+    func testCyclePreamp_fromPRE1_sendsPRE2() {
+        radio.handleFrame("PA1;")  // radio reports PRE1
+        DiagnosticsStore.shared.txLog = []
+        radio.cyclePreampLevel()
+        XCTAssertTrue(sentCommands.contains("PA2;"), "Cycle from PRE1 should send PA2; (PRE2), got \(sentCommands)")
+    }
+
+    func testCyclePreamp_fromPRE2_sendsOff() {
+        radio.handleFrame("PA2;")  // radio reports PRE2
+        DiagnosticsStore.shared.txLog = []
+        radio.cyclePreampLevel()
+        XCTAssertTrue(sentCommands.contains("PA0;"), "Cycle from PRE2 should send PA0; (Off), got \(sentCommands)")
+    }
+
+    func testCyclePreamp_updatesLocalStateImmediately() {
+        radio.handleFrame("PA0;")
+        radio.cyclePreampLevel()
+        XCTAssertEqual(radio.preampLevel, .pre1, "preampLevel should update optimistically before radio confirms")
+    }
+
+    // MARK: - Beat cancel cycle (BC button)
+
+    func testCycleBC_fromOff_sendsBC1() {
+        radio.handleFrame("BC0;")
+        DiagnosticsStore.shared.txLog = []
+        radio.cycleBeatCancelMode()
+        XCTAssertTrue(sentCommands.contains("BC1;"), "Cycle from Off should send BC1;, got \(sentCommands)")
+    }
+
+    func testCycleBC_fromBC1_sendsBC2() {
+        radio.handleFrame("BC1;")
+        DiagnosticsStore.shared.txLog = []
+        radio.cycleBeatCancelMode()
+        XCTAssertTrue(sentCommands.contains("BC2;"), "Cycle from BC1 should send BC2;, got \(sentCommands)")
+    }
+
+    func testCycleBC_fromBC2_sendsOff() {
+        radio.handleFrame("BC2;")
+        DiagnosticsStore.shared.txLog = []
+        radio.cycleBeatCancelMode()
+        XCTAssertTrue(sentCommands.contains("BC0;"), "Cycle from BC2 should send BC0; (Off), got \(sentCommands)")
+    }
+
+    func testCycleBC_updatesLocalStateImmediately() {
+        radio.handleFrame("BC0;")
+        radio.cycleBeatCancelMode()
+        XCTAssertEqual(radio.beatCancelMode, .bc1, "beatCancelMode should update optimistically before radio confirms")
+    }
+
+    // MARK: - Attenuator cycle (ATT button — regression guard)
+
+    func testCycleATT_fromOff_sends6dB() {
+        radio.handleFrame("RA0;")
+        DiagnosticsStore.shared.txLog = []
+        radio.cycleAttenuatorLevel()
+        XCTAssertTrue(sentCommands.contains("RA1;"), "Cycle ATT from Off should send RA1; (6dB), got \(sentCommands)")
+    }
+
+    func testCycleATT_from18dB_sendsOff() {
+        radio.handleFrame("RA3;")
+        DiagnosticsStore.shared.txLog = []
+        radio.cycleAttenuatorLevel()
+        XCTAssertTrue(sentCommands.contains("RA0;"), "Cycle ATT from 18dB should send RA0; (Off), got \(sentCommands)")
+    }
+
+    // MARK: - setPreampLevel direct set (context menu / right-click)
+
+    func testSetPreampLevel_directlyToPRE2_sendsPRE2() {
+        radio.setPreampLevel(.pre2)
+        XCTAssertTrue(sentCommands.contains("PA2;"), "Direct set to PRE2 should send PA2;, got \(sentCommands)")
+        XCTAssertEqual(radio.preampLevel, .pre2)
+    }
+
+    func testSetBeatCancelMode_directlyToBC2_sendsBC2() {
+        radio.setBeatCancelMode(.bc2)
+        XCTAssertTrue(sentCommands.contains("BC2;"), "Direct set to BC2 should send BC2;, got \(sentCommands)")
+        XCTAssertEqual(radio.beatCancelMode, .bc2)
     }
 }

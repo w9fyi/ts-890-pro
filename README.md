@@ -1,6 +1,6 @@
 # TS-890 Pro
 
-A macOS app for remotely operating a Kenwood TS-890S (and compatible TS-series radios) over a local network. Designed to be fully accessible with VoiceOver.
+A macOS app for remotely operating a Kenwood TS-890S over a local network or USB. Designed to be fully accessible with VoiceOver.
 
 ## Features
 
@@ -9,17 +9,27 @@ A macOS app for remotely operating a Kenwood TS-890S (and compatible TS-series r
 - USB serial CAT via CP2102N / Silicon Labs adapter
 - Software noise reduction (RNNoise, WDSP EMNR, WDSP ANR)
 - Receive and transmit audio equalizer
+- FreeDV digital voice (modes 1600, 700D, 2020)
+- FT8 / WSJT-X digital mode integration (USB-DATA + USB audio routing)
+- Bandscope and waterfall display
+- KNS server administration (manage users, VoIP, session settings without the front panel)
+- EX menu access — all 125 menu items, verified against the CAT reference
 - Memory channel browser (read, recall, program)
 - MIDI VFO tuning (CTR2MIDI and compatible encoders)
-- Digital mode integration (WSJT-X / FT8 — USB-DATA mode + USB audio routing)
 - Connection profiles for multiple radios or account types
 - VoiceOver-first design — every control is labeled and keyboard accessible
 
 ## Requirements
 
 - macOS 14 Sonoma or later
-- Kenwood TS-890S with KNS (Kenwood Network System) enabled on the radio's LAN menu
-- The radio's IP address and KNS administrator ID/password
+- Kenwood TS-890S with KNS enabled on the radio's LAN menu (for LAN operation), or connected via USB (for serial CAT)
+- The radio's IP address and KNS administrator ID/password (LAN), or Silicon Labs CP2102N driver (USB)
+
+## Platform Support
+
+The pre-built binary is compiled for **Apple Silicon (arm64)**. It runs on Intel Macs via **Rosetta 2** — macOS installs Rosetta 2 automatically the first time you open the app on an Intel Mac, and performance is indistinguishable from native for this type of application.
+
+To build a native Intel binary, see [Build from source](#option-2--build-from-source) below and install fftw on an Intel Mac with `brew install fftw` before building.
 
 ---
 
@@ -28,11 +38,12 @@ A macOS app for remotely operating a Kenwood TS-890S (and compatible TS-series r
 ### Option 1 — Download a pre-built binary (easiest)
 
 1. Go to the [Releases](https://github.com/w9fyi/ts-890-pro/releases) page.
-2. Download the latest `Kenwood.control.zip`.
-3. Unzip it and drag **Kenwood control.app** to your `/Applications` folder.
+2. Download the latest `TS-890.Pro.zip`.
+3. Unzip it and drag **TS-890 Pro.app** to your `/Applications` folder.
 4. On first launch, macOS will show a Gatekeeper warning because the app is not notarized.
    - Right-click (or Control-click) the app icon and choose **Open**, then click **Open** in the dialog.
    - You only need to do this once.
+5. **Intel Mac users:** if macOS offers to install Rosetta 2, click **Install**. The app then opens normally.
 
 ### Option 2 — Build from source
 

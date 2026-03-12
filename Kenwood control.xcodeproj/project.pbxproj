@@ -37,9 +37,16 @@
 				ft8_lib/demo/decode_ft8.c,
 				ft8_lib/demo/gen_ft8.c,
 				ft8_lib/test/test.c,
+				ft8_lib/test/wav,
 				ft8_lib/LICENSE,
 				ft8_lib/README.md,
 				ft8_lib/Makefile,
+				ft8_lib/.clang-format,
+				ft8_lib/.gitignore,
+				ft8_lib/utils/convert_generator.py,
+				ft8_lib/utils/decode.py,
+				ft8_lib/utils/ldpc.py,
+				ft8_lib/utils/run_tests.py,
 				ft8_lib/ft4_ft8_public/Makefile,
 				ft8_lib/ft4_ft8_public/free_text_to_f71.f90,
 				ft8_lib/ft4_ft8_public/gen_crc14.f90,
@@ -48,6 +55,10 @@
 				ft8_lib/ft4_ft8_public/hashcodes.f90,
 				ft8_lib/ft4_ft8_public/nonstd_to_c58.f90,
 				ft8_lib/ft4_ft8_public/std_call_to_c28.f90,
+				rnnoise/LICENSE,
+				rnnoise/README.md,
+				rnnoise/src/compile.sh,
+				rnnoise/src/rnn_train.py,
 			);
 			target = 7FCA46AF2F3D39560045FEBD /* TS-890 Pro */;
 		};

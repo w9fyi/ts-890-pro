@@ -64,6 +64,7 @@ enum KeyboardAction: String, CaseIterable, Codable {
     case openFT8        = "openFT8"
     case openTuning     = "openTuning"
     case openMenuAccess = "openMenuAccess"
+    case openFreeDV     = "openFreeDV"
 
     var displayName: String {
         switch self {
@@ -99,6 +100,7 @@ enum KeyboardAction: String, CaseIterable, Codable {
         case .openFT8:        return "Open FT8 Window"
         case .openTuning:     return "Open Tuning Panel"
         case .openMenuAccess: return "Open Menu Access"
+        case .openFreeDV:     return "Open FreeDV Window"
         }
     }
 
@@ -129,6 +131,7 @@ enum KeyboardAction: String, CaseIterable, Codable {
         case .openFT8:        return "Opens the FT8 / digital modes window."
         case .openTuning:     return "Opens the Tuning Panel window."
         case .openMenuAccess: return "Opens the Menu Access window."
+        case .openFreeDV:     return "Opens the FreeDV window."
         }
     }
 
@@ -139,7 +142,7 @@ enum KeyboardAction: String, CaseIterable, Codable {
     /// True for actions that open a window rather than control the radio.
     var isPanelAction: Bool {
         switch self {
-        case .openFT8, .openTuning, .openMenuAccess: return true
+        case .openFT8, .openTuning, .openMenuAccess, .openFreeDV: return true
         default: return false
         }
     }
@@ -150,6 +153,7 @@ enum KeyboardAction: String, CaseIterable, Codable {
         case .openFT8:        return "ft8"
         case .openTuning:     return "tuning"
         case .openMenuAccess: return "menuAccess"
+        case .openFreeDV:     return "freedv"
         default:              return nil
         }
     }
@@ -164,7 +168,7 @@ enum KeyboardAction: String, CaseIterable, Codable {
             ("VFO",          [.vfoSwap, .vfoAtoB]),
             ("Functions",    [.ritToggle, .splitToggle, .pttHold]),
             ("Macros",       [.macro1, .macro2, .macro3, .macro4]),
-            ("Panels",       [.openFT8, .openTuning, .openMenuAccess]),
+            ("Panels",       [.openFT8, .openTuning, .openMenuAccess, .openFreeDV]),
         ]
     }
 }
@@ -433,7 +437,7 @@ final class KeyboardShortcutsManager {
         case .macro4: sendMacro(macro4String, radio: radio)
 
         case .pttHold: break  // handled via keyDown/keyUp in handleEvent
-        case .openFT8, .openTuning, .openMenuAccess: break  // handled via notification in handleEvent
+        case .openFT8, .openTuning, .openMenuAccess, .openFreeDV: break  // handled via notification in handleEvent
         }
     }
 

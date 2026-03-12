@@ -16,7 +16,7 @@ final class FT8ViewModel {
     var isAutoReplyEnabled: Bool = false
     var simulateDecodedText: String = ""
     var decodedMessages: [DecodedMessage] = []
-    var holdDecodedListUpdates: Bool = true
+    var holdDecodedListUpdates: Bool = false
     var pendingDecodedMessagesCount: Int = 0
     var activityLog: [String] = []
     var verboseFT8Logging: Bool = false
@@ -29,6 +29,12 @@ final class FT8ViewModel {
     var cqParityRaw: String = "Even"
     var isTxArmed: Bool = false
     var nextCQTxAt: Date?
+    var isAutoSequenceEnabled: Bool = false
+    var autoSequencePriority: AutoSequencePriority = .firstDecoded
+    var alertSoundName: String = UserDefaults.standard.string(forKey: "FT8.AlertSoundName") ?? "Radar" {
+        didSet { UserDefaults.standard.set(alertSoundName, forKey: "FT8.AlertSoundName") }
+    }
+    private var autoSeqCandidates: [(msg: DecodedMessage, snr: Float, distKm: Double?)] = []
 
     private var cqTimer: DispatchSourceTimer?
 
@@ -85,14 +91,33 @@ final class FT8ViewModel {
         case odd = "Odd"
     }
 
+    enum AutoSequencePriority: String, CaseIterable {
+        case firstDecoded = "First Decoded"
+        case bestSNR      = "Best SNR"
+        case mostDistant  = "Most Distant"
+    }
+
     struct DecodedMessage: Identifiable {
-        let id = UUID()
+        let id: UUID
         let receivedAt: Date
         let raw: String
         let caller: String
         let to: String
         let payload: String
         let isDirectedToMe: Bool
+        let snr: Float
+
+        init(receivedAt: Date, raw: String, caller: String, to: String,
+             payload: String, isDirectedToMe: Bool, snr: Float = 0) {
+            self.id            = UUID()
+            self.receivedAt    = receivedAt
+            self.raw           = raw
+            self.caller        = caller
+            self.to            = to
+            self.payload       = payload
+            self.isDirectedToMe = isDirectedToMe
+            self.snr           = snr
+        }
     }
 
     func appendLog(_ line: String) {
@@ -103,7 +128,7 @@ final class FT8ViewModel {
         }
     }
 
-    func processDecodedLine(_ line: String, myCall: String, myGrid: String) {
+    func processDecodedLine(_ line: String, snr: Float = 0, myCall: String, myGrid: String) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -116,7 +141,11 @@ final class FT8ViewModel {
         let upperGrid = myGrid.uppercased()
 
         let parsed = parseDecodedLine(normalized, myCall: upperCall)
-        if let msg = parsed {
+        if let parsed {
+            let msg = DecodedMessage(receivedAt: parsed.receivedAt, raw: parsed.raw,
+                                     caller: parsed.caller, to: parsed.to,
+                                     payload: parsed.payload,
+                                     isDirectedToMe: parsed.isDirectedToMe, snr: snr)
             ingestDecodedMessage(msg)
         }
 
@@ -138,11 +167,19 @@ final class FT8ViewModel {
     }
 
     private func ingestDecodedMessage(_ msg: DecodedMessage) {
-        // Play Radar alert the first time a new station answers our CQ.
+        // Play the user-selected alert sound the first time a station calls us directly.
         if msg.isDirectedToMe && !alertedCallers.contains(msg.caller) {
             alertedCallers.insert(msg.caller)
-            (NSSound(named: NSSound.Name("Radar"))
+            (NSSound(named: NSSound.Name(alertSoundName))
+                ?? NSSound(named: NSSound.Name("Radar"))
                 ?? NSSound(named: NSSound.Name("Ping")))?.play()
+        }
+
+        // Collect autosequence candidates for this decode batch.
+        if isAutoSequenceEnabled && isCQRunning && queuedTarget == nil && msg.isDirectedToMe {
+            let distKm: Double? = autoDecodeMyGrid.isEmpty ? nil
+                : FT8ViewModel.gridDistanceKm(from: autoDecodeMyGrid, to: msg.payload)
+            autoSeqCandidates.append((msg: msg, snr: msg.snr, distKm: distKm))
         }
 
         if holdDecodedListUpdates {
@@ -485,14 +522,80 @@ final class FT8ViewModel {
                     } else {
                         self.lastDecodeSummary = "Decoded \(results.count) message\(results.count == 1 ? "" : "s")"
                         self.appendLog("\(proto.rawValue) decode: \(results.count) message(s)")
+                        self.autoSeqCandidates.removeAll()
                         for r in results {
-                            self.processDecodedLine(r.message, myCall: myCall, myGrid: myGrid)
+                            self.processDecodedLine(r.message, snr: r.snr, myCall: myCall, myGrid: myGrid)
                         }
+                        self.commitAutoSeq()
                     }
                 }
             }
         }
     }
+
+    // MARK: - Autosequence
+
+    /// After a full decode batch, pick the best candidate (per priority) and queue them.
+    func commitAutoSeq() {
+        guard isAutoSequenceEnabled && isCQRunning && queuedTarget == nil
+                && !autoSeqCandidates.isEmpty else {
+            autoSeqCandidates.removeAll()
+            return
+        }
+        let winner: DecodedMessage?
+        switch autoSequencePriority {
+        case .firstDecoded:
+            winner = autoSeqCandidates.first?.msg
+        case .bestSNR:
+            winner = autoSeqCandidates.max(by: { $0.snr < $1.snr })?.msg
+        case .mostDistant:
+            winner = autoSeqCandidates.max(by: { ($0.distKm ?? 0) < ($1.distKm ?? 0) })?.msg
+        }
+        if let w = winner {
+            queueTarget(w.caller, for: w, myCall: autoDecodeMyCall, myGrid: autoDecodeMyGrid)
+            appendLog("AutoSeq: queued \(w.caller) (\(autoSequencePriority.rawValue))")
+            AppFileLogger.shared.log("FT8 AutoSeq: queued \(w.caller) priority=\(autoSequencePriority.rawValue)")
+        }
+        autoSeqCandidates.removeAll()
+    }
+
+    // MARK: - Grid distance helpers
+
+    static func maidenheadToLatLon(_ grid: String) -> (lat: Double, lon: Double)? {
+        let g = grid.uppercased()
+        guard g.count >= 4 else { return nil }
+        let chars = Array(g)
+        guard chars[0].isLetter, chars[1].isLetter,
+              chars[2].isNumber, chars[3].isNumber else { return nil }
+        guard let f0 = chars[0].asciiValue, let f1 = chars[1].asciiValue else { return nil }
+        let aVal = Int(Character("A").asciiValue!)
+        let lon0 = Double(Int(f0) - aVal) * 20.0 - 180.0
+        let lat0 = Double(Int(f1) - aVal) * 10.0 - 90.0
+        let sq0 = Int(chars[2].asciiValue! - Character("0").asciiValue!)
+        let sq1 = Int(chars[3].asciiValue! - Character("0").asciiValue!)
+        return (lat: lat0 + Double(sq1) * 1.0 + 0.5,
+                lon: lon0 + Double(sq0) * 2.0 + 1.0)
+    }
+
+    static func gridDistanceKm(from grid1: String, to grid2: String) -> Double? {
+        guard !grid1.isEmpty, !grid2.isEmpty,
+              let p1 = maidenheadToLatLon(grid1),
+              let p2 = maidenheadToLatLon(grid2) else { return nil }
+        let R = 6371.0
+        let dLat = (p2.lat - p1.lat) * .pi / 180
+        let dLon = (p2.lon - p1.lon) * .pi / 180
+        let a = sin(dLat/2)*sin(dLat/2)
+            + cos(p1.lat * .pi/180) * cos(p2.lat * .pi/180) * sin(dLon/2)*sin(dLon/2)
+        return 2 * R * atan2(sqrt(a), sqrt(1 - a))
+    }
+
+    // MARK: - Alert sound list
+
+    static let availableSoundNames: [String] = [
+        "Basso", "Blow", "Bottle", "Frog", "Funk", "Glass",
+        "Hero", "Morse", "Ping", "Pop", "Purr", "Radar",
+        "Sosumi", "Submarine", "Tink"
+    ]
 
     func setAutoDecodeEnabled(_ enabled: Bool, myCall: String, myGrid: String) {
         isAutoDecodeEnabled = enabled
@@ -732,32 +835,92 @@ struct FT8SectionView: View {
     var body: some View {
         VStack(spacing: 0) {
             // ─ Top bar ───────────────────────────────────────────────────────
-            HStack(spacing: 16) {
-                Picker("", selection: $vm.selectedProtocol) {
-                    ForEach(FT8Protocol.allCases, id: \.self) { p in
-                        Text(p.rawValue).tag(p)
+            VStack(spacing: 0) {
+                // Row 1: protocol / start-stop / settings
+                HStack(spacing: 16) {
+                    Picker("", selection: $vm.selectedProtocol) {
+                        ForEach(FT8Protocol.allCases, id: \.self) { p in
+                            Text(p.rawValue).tag(p)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 120)
+                    .accessibilityLabel("Protocol, FT8 or FT4")
+
+                    Button(vm.isFT8Running ? "Stop FT8" : "Start FT8") {
+                        if vm.isFT8Running { stopFT8() } else { startFT8() }
+                    }
+                    .accessibilityLabel(vm.isFT8Running ? "Stop FT8" : "Start FT8")
+
+                    Spacer()
+
+                    Button(action: { showSettings = true }) {
+                        Image(systemName: "gearshape")
+                            .imageScale(.large)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("FT8 Settings")
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+                // Row 2: band / CQ / parity / auto-reply
+                HStack(spacing: 12) {
+                    Picker("Band", selection: $selectedPresetID) {
+                        ForEach(FT8BandPreset.allPresets) { p in
+                            Text(p.label).tag(p.id)
+                        }
+                        Text("Manual").tag("manual")
+                    }
+                    .frame(minWidth: 100)
+                    .accessibilityLabel("FT8 band")
+
+                    if selectedPresetID == "manual" {
+                        TextField("MHz", text: $frequencyOverrideMHz)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+                            .accessibilityLabel("Manual frequency in megahertz")
+                    }
+
+                    Divider().frame(height: 20)
+
+                    Button(vm.isCQRunning ? "Stop CQ" : "CQ") {
+                        if vm.isCQRunning { stopCQ() } else { startCQ() }
+                    }
+                    .disabled(!vm.isFT8Running)
+                    .accessibilityLabel(vm.isCQRunning ? "Stop CQ" : "Start CQ")
+
+                    Picker("Cycle", selection: $vm.cqParityRaw) {
+                        ForEach(FT8ViewModel.CQParity.allCases, id: \.rawValue) { p in
+                            Text(p.rawValue).tag(p.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 120)
+                    .accessibilityLabel("CQ cycle parity, even or odd")
+
+                    Toggle("Auto-Reply", isOn: $vm.isAutoReplyEnabled)
+                        .accessibilityLabel("Auto-reply to directed calls")
+
+                    Spacer()
+
+                    if vm.isCQRunning {
+                        if let next = vm.nextCQTxAt {
+                            Text("TX \(next.formatted(date: .omitted, time: .standard))  CQ \(myCallsign.uppercased()) \(myGrid.uppercased())")
+                                .font(.system(.footnote, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .accessibilityLabel("Next CQ transmit at \(next.formatted(date: .omitted, time: .standard))")
+                        } else {
+                            Text("CQ \(myCallsign.uppercased()) \(myGrid.uppercased())")
+                                .font(.system(.footnote, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 120)
-                .accessibilityLabel("Protocol, FT8 or FT4")
-
-                Button(vm.isFT8Running ? "Stop FT8" : "Start FT8") {
-                    if vm.isFT8Running { stopFT8() } else { startFT8() }
-                }
-                .accessibilityLabel(vm.isFT8Running ? "Stop FT8" : "Start FT8")
-
-                Spacer()
-
-                Button(action: { showSettings = true }) {
-                    Image(systemName: "gearshape")
-                        .imageScale(.large)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("FT8 Settings")
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
 
             // ─ Queued target banner (only when running + queued) ─────────────
             if vm.isFT8Running, let target = vm.queuedTarget {
@@ -843,14 +1006,10 @@ struct FT8SectionView: View {
                 myCallsign: $myCallsign,
                 myGrid: $myGrid,
                 myLocation: $myLocation,
-                selectedPresetID: $selectedPresetID,
-                frequencyOverrideMHz: $frequencyOverrideMHz,
                 forceUSB: $forceUSB,
                 forceDataMode: $forceDataMode,
                 ensureLanAudio: $ensureLanAudio,
-                isPresented: $showSettings,
-                startCQ: startCQ,
-                stopCQ: stopCQ
+                isPresented: $showSettings
             )
         }
         .onAppear {
@@ -874,9 +1033,12 @@ struct FT8SectionView: View {
     }
 
     private var selectedFrequencyHz: Int {
-        let trimmed = frequencyOverrideMHz.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty, let mhz = Double(trimmed) {
-            return Int((mhz * 1_000_000.0).rounded())
+        if selectedPresetID == "manual" {
+            let trimmed = frequencyOverrideMHz.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let mhz = Double(trimmed) {
+                return Int((mhz * 1_000_000.0).rounded())
+            }
+            return 14_074_000
         }
         return FT8BandPreset.allPresets.first(where: { $0.id == selectedPresetID })?.frequencyHz ?? 14_074_000
     }
@@ -902,6 +1064,7 @@ struct FT8SectionView: View {
 
         vm.clearDecodedMessages()   // fresh list on each Start
         vm.isFT8Running = true
+        vm.isTxArmed = true
         vm.appendLog("FT8 start: tuning to \(dialFrequencyLabelHz(hz))")
         AppFileLogger.shared.log("FT8: start hz=\(hz) preset=\(selectedPresetID)")
         if !vm.isRxCaptureEnabled {
@@ -937,6 +1100,7 @@ struct FT8SectionView: View {
 
     private func stopFT8() {
         stopCQ()
+        vm.isTxArmed = false
         vm.appendLog("FT8 stop: restoring pre-FT8 rig state (best-effort)")
         AppFileLogger.shared.log("FT8: stop restore")
 
@@ -1076,26 +1240,10 @@ private struct FT8SettingsSheet: View {
     @Binding var myCallsign: String
     @Binding var myGrid: String
     @Binding var myLocation: String
-    @Binding var selectedPresetID: String
-    @Binding var frequencyOverrideMHz: String
     @Binding var forceUSB: Bool
     @Binding var forceDataMode: Bool
     @Binding var ensureLanAudio: Bool
     @Binding var isPresented: Bool
-    let startCQ: () -> Void
-    let stopCQ: () -> Void
-
-    private var selectedFrequencyHz: Int {
-        let trimmed = frequencyOverrideMHz.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty, let mhz = Double(trimmed) {
-            return Int((mhz * 1_000_000.0).rounded())
-        }
-        return FT8BandPreset.allPresets.first(where: { $0.id == selectedPresetID })?.frequencyHz ?? 14_074_000
-    }
-
-    private func dialLabel(_ hz: Int) -> String {
-        String(format: "%.6f MHz", Double(hz) / 1_000_000.0)
-    }
 
     var body: some View {
         ScrollView {
@@ -1134,55 +1282,6 @@ private struct FT8SettingsSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                // ── Auto-Reply ───────────────────────────────────────────────
-                GroupBox("Auto-Reply") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Auto-reply to directed calls", isOn: $vm.isAutoReplyEnabled)
-                            .accessibilityLabel("Auto-reply to directed calls")
-                        Text("When enabled, the app generates and queues exchange replies automatically each slot.")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                // ── CQ ───────────────────────────────────────────────────────
-                GroupBox("CQ") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 12) {
-                            Button(vm.isCQRunning ? "Stop CQ" : "Start CQ") {
-                                if vm.isCQRunning { stopCQ() } else { startCQ() }
-                            }
-                            .disabled(!vm.isFT8Running)
-                            .accessibilityLabel(vm.isCQRunning ? "Stop CQ" : "Start CQ")
-
-                            Picker("Cycle", selection: $vm.cqParityRaw) {
-                                ForEach(FT8ViewModel.CQParity.allCases, id: \.rawValue) { p in
-                                    Text(p.rawValue).tag(p.rawValue)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(width: 160)
-                            .accessibilityLabel("CQ cycle parity, even or odd")
-                        }
-
-                        Toggle("TX Armed (enables RF transmission)", isOn: $vm.isTxArmed)
-                            .accessibilityLabel("Transmit armed")
-
-                        if let next = vm.nextCQTxAt {
-                            Text("Next TX: \(next.formatted(date: .omitted, time: .standard))")
-                                .font(.system(.footnote, design: .monospaced))
-                                .foregroundColor(.secondary)
-                        }
-
-                        Text("CQ message: CQ \(myCallsign.uppercased()) \(myGrid.uppercased())")
-                            .font(.system(.footnote, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .accessibilityLabel("CQ message preview: CQ \(myCallsign.uppercased()) \(myGrid.uppercased())")
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
                 // ── TX Audio Level ───────────────────────────────────────────
                 GroupBox("TX Audio Level") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -1200,34 +1299,59 @@ private struct FT8SettingsSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                // ── Band / Frequency ─────────────────────────────────────────
-                GroupBox("Band / Frequency") {
+                // ── Alert Sounds ─────────────────────────────────────────────
+                GroupBox("Alert Sounds") {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(spacing: 12) {
-                            Picker("Band", selection: $selectedPresetID) {
-                                ForEach(FT8BandPreset.allPresets) { p in
-                                    Text(p.label).tag(p.id)
+                            Text("Directed call alert:")
+                                .frame(width: 140, alignment: .leading)
+                            Picker("Alert sound", selection: $vm.alertSoundName) {
+                                ForEach(FT8ViewModel.availableSoundNames, id: \.self) { name in
+                                    Text(name).tag(name)
                                 }
                             }
-                            .frame(minWidth: 180)
-                            .accessibilityLabel("FT8 band")
-
-                            Text(dialLabel(selectedFrequencyHz))
-                                .font(.system(.body, design: .monospaced))
-                                .accessibilityLabel("Dial frequency \(dialLabel(selectedFrequencyHz))")
+                            .frame(minWidth: 130)
+                            .accessibilityLabel("Alert sound for directed calls")
+                            Button("Preview") {
+                                NSSound(named: NSSound.Name(vm.alertSoundName))?.play()
+                            }
+                            .accessibilityLabel("Preview alert sound")
                         }
+                        Text("Plays when a station calls you directly (e.g. W1AW AI5OS +02).")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
-                        HStack(spacing: 12) {
-                            Text("Override (MHz):")
-                            TextField("e.g. 14.074", text: $frequencyOverrideMHz)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 160)
-                                .accessibilityLabel("Frequency override in megahertz")
-                            if !frequencyOverrideMHz.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                Button("Clear") { frequencyOverrideMHz = "" }
+                // ── Auto-Sequence ─────────────────────────────────────────────
+                GroupBox("Auto-Sequence") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Toggle("Auto-sequence while CQ is running", isOn: $vm.isAutoSequenceEnabled)
+                            .accessibilityLabel("Auto-sequence responding stations")
+                        if vm.isAutoSequenceEnabled {
+                            HStack(spacing: 12) {
+                                Text("Priority:")
+                                    .frame(width: 60, alignment: .leading)
+                                Picker("Priority", selection: $vm.autoSequencePriority) {
+                                    ForEach(FT8ViewModel.AutoSequencePriority.allCases, id: \.rawValue) { p in
+                                        Text(p.rawValue).tag(p)
+                                    }
+                                }
+                                .frame(minWidth: 160)
+                                .accessibilityLabel("Auto-sequence priority")
                             }
                         }
+                        Text("When enabled and CQ is running, automatically queues the highest-priority calling station each decode cycle.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
+                // ── Radio Setup ───────────────────────────────────────────────
+                GroupBox("Radio Setup") {
+                    VStack(alignment: .leading, spacing: 10) {
                         Toggle("Force USB mode", isOn: $forceUSB)
                         Toggle("Force Data Mode (USB-DATA via MD2)", isOn: $forceDataMode)
                         Toggle("Ensure LAN RX audio is running", isOn: $ensureLanAudio)

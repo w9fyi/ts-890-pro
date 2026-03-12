@@ -77,6 +77,9 @@ struct MemoryBrowserView: View {
                     radio.recallMemoryChannel(selectedChannelID)
                 }
                 .accessibilityHint("Switches to memory mode and tunes to channel \(selectedChannelID)")
+
+                Button("Return to VFO") { radio.setMemoryMode(enabled: false) }
+                    .accessibilityHint("Exits memory mode and returns to VFO")
             }
 
             // Current channel summary

@@ -193,7 +193,7 @@ struct Kenwood_controlApp: App {
 
                 Button("Cycle NR Backend") { radio.cycleNoiseReductionBackend() }
                     .keyboardShortcut("r", modifiers: [.command, .control])
-                    .disabled(!radio.isNoiseReductionAvailable)
+                    .disabled(radio.availableNoiseReductionBackends.count < 2)
 
                 Toggle("Mute Audio", isOn: Binding(
                     get: { radio.isAudioMuted },
@@ -208,6 +208,8 @@ struct Kenwood_controlApp: App {
                     .keyboardShortcut("k", modifiers: [.command, .option, .shift])
             }
             CommandMenu("Mode") {
+                Button("FreeDV…") { openWindow(id: "freedv") }
+                Divider()
                 Button("Lower Sideband (LSB)") {
                     radio.send(KenwoodCAT.setOperatingMode(.lsb))
                     radio.send(KenwoodCAT.getOperatingMode())
@@ -278,6 +280,9 @@ struct Kenwood_controlApp: App {
         }
         Settings {
             SettingsView(radio: radio)
+        }
+        WindowGroup("FreeDV", id: "freedv") {
+            FreeDVSectionView(radio: radio)
         }
         WindowGroup("FT8", id: "ft8") {
             FT8SectionView(radio: radio)

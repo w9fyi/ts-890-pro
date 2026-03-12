@@ -91,6 +91,13 @@ struct FrontPanelView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
 
+            if radio.isMemoryMode == true {
+                Divider()
+                MemoryModeBanner(radio: radio)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+            }
+
             Divider()
 
             ModeRow(radio: radio)
@@ -140,6 +147,35 @@ struct FrontPanelView: View {
             ScopePanel(radio: radio, engine: waterfallEngine)
                 .frame(maxHeight: .infinity)
         }
+    }
+}
+
+// MARK: - Memory mode banner
+
+private struct MemoryModeBanner: View {
+    let radio: RadioState
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "memorychip")
+                .foregroundColor(.orange)
+                .accessibilityHidden(true)
+            Text("Memory Mode")
+                .fontWeight(.medium)
+            if let ch = radio.memoryChannelNumber {
+                Text("CH \(String(format: "%03d", ch))")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button("Return to VFO") { radio.setMemoryMode(enabled: false) }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .tint(.orange)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Memory mode active\(radio.memoryChannelNumber != nil ? ", channel \(radio.memoryChannelNumber!)" : "")")
+        .accessibilityAddTraits(.isStaticText)
     }
 }
 

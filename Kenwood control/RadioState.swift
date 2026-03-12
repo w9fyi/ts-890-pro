@@ -71,17 +71,20 @@ final class RadioState {
         case software  // uses WDSP inside the app
     }
 
-    /// Three-state cycle for the software (WDSP) NR path: Off → ANR → EMNR → Off.
+    /// Software NR button cycle: Off → RNNoise+ANR → Off.
+    /// ANR and EMNR remain selectable from the backend picker but are not in the button cycle.
     enum SoftwareNRState: String, CaseIterable {
-        case off   = "Off"
-        case anr   = "ANR"
-        case emnr  = "EMNR"
+        case off     = "Off"
+        case cascade = "RNNoise+ANR"
+        case anr     = "ANR"
+        case emnr    = "EMNR"
 
         var next: SoftwareNRState {
             switch self {
-            case .off:  return .anr
-            case .anr:  return .emnr
-            case .emnr: return .off
+            case .off:     return .cascade
+            case .cascade: return .off
+            case .anr:     return .off
+            case .emnr:    return .off
             }
         }
     }
@@ -93,6 +96,9 @@ final class RadioState {
     }
 
     var connectionStatus: String = ConnectionStatus.disconnected.rawValue
+    /// One-shot callback fired when a CK0 read-back response arrives. Cleared after use.
+    /// Set before sending `CK0;` query; called on main thread from handleFrame.
+    var pendingCKReadback: ((String) -> Void)?
     var vfoAFrequencyHz: Int?
     var vfoBFrequencyHz: Int?
     var operatingMode: KenwoodCAT.OperatingMode?
@@ -119,7 +125,11 @@ final class RadioState {
     var splitOffsetPlus: Bool?
     var splitOffsetKHz: Int?
     var isTransmitting: Bool?
+    /// True while the radio is actually on-air (set from AI4 TX/RX frames — any source).
     var isPTTDown: Bool = false
+    /// True only when this app initiated PTT. Kept separate from isPTTDown so that
+    /// external keying (foot pedal, VOX, front panel) does not block app-initiated TX.
+    var isAppPTTActive: Bool = false
     var isMemoryMode: Bool?
     var memoryChannelNumber: Int?
     var memoryChannelFrequencyHz: Int?
@@ -327,7 +337,10 @@ final class RadioState {
     private let processorProxy = NoiseReductionProcessorProxy(inner: PassthroughNoiseReduction())
     private var noiseProcessor: any NoiseReductionProcessor {
         get { processorProxy.inner }
-        set { processorProxy.inner = newValue }
+        set {
+            processorProxy.inner = newValue
+            isNoiseReductionAvailable = newValue.isAvailable
+        }
     }
     private var audioMonitor: AudioMonitor?
     private var txPassthrough: AudioPassthrough?
@@ -388,24 +401,36 @@ final class RadioState {
     init() {
         // Build the list of available NR backends.
         var available: [String] = []
-        if WDSPNoiseReductionProcessor(mode: .emnr) != nil { available.append("WDSP EMNR") }
-        if WDSPNoiseReductionProcessor(mode: .anr)  != nil { available.append("WDSP ANR") }
+        if RNNoiseProcessor() != nil && WDSPNoiseReductionProcessor(mode: .anr) != nil { available.append("RNNoise + ANR") }
         if RNNoiseProcessor() != nil { available.append("RNNoise (in-process)") }
+        if WDSPNoiseReductionProcessor(mode: .anr)  != nil { available.append("WDSP ANR") }
+        if WDSPNoiseReductionProcessor(mode: .emnr) != nil { available.append("WDSP EMNR") }
         available.append("Passthrough (disabled)")
         self.availableNoiseReductionBackends = available
 
         // Pick the best available backend and wire it into the proxy.
-        // Auto-selection order: WDSP EMNR → RNNoise C → Passthrough.
-        if let emnr = WDSPNoiseReductionProcessor(mode: .emnr) {
+        // Auto-selection order: RNNoise+ANR → RNNoise → WDSP ANR → WDSP EMNR → Passthrough.
+        if let rnnoise = RNNoiseProcessor(), let anr = WDSPNoiseReductionProcessor(mode: .anr) {
+            noiseProcessor = CascadeNoiseReductionProcessor(primary: rnnoise, secondary: anr)
+            isNoiseReductionEnabled = false
+            noiseReductionBackend = "RNNoise + ANR"
+            selectedNoiseReductionBackend = "RNNoise + ANR"
+        } else if let rnnoise = RNNoiseProcessor() {
+            noiseProcessor = rnnoise
+            isNoiseReductionEnabled = false
+            noiseReductionBackend = rnnoise.backendDescription
+            selectedNoiseReductionBackend = "RNNoise (in-process)"
+        } else if let anr = WDSPNoiseReductionProcessor(mode: .anr) {
+            anr.isEnabled = false
+            noiseProcessor = anr
+            isNoiseReductionEnabled = false
+            noiseReductionBackend = "WDSP ANR"
+            selectedNoiseReductionBackend = "WDSP ANR"
+        } else if let emnr = WDSPNoiseReductionProcessor(mode: .emnr) {
             noiseProcessor = emnr
             isNoiseReductionEnabled = false
             noiseReductionBackend = "WDSP EMNR"
             selectedNoiseReductionBackend = "WDSP EMNR"
-        } else if let rnnoise = RNNoiseProcessor() {
-            noiseProcessor = rnnoise
-            isNoiseReductionEnabled = rnnoise.isEnabled
-            noiseReductionBackend = rnnoise.backendDescription
-            selectedNoiseReductionBackend = "RNNoise (in-process)"
         } else {
             noiseProcessor = PassthroughNoiseReduction()
             isNoiseReductionEnabled = false
@@ -480,6 +505,8 @@ final class RadioState {
 
         wireCallbacks()
     }
+
+    nonisolated deinit {}
 
     // MARK: - Frame-drain state
     // Batches incoming CAT frames so we dispatch to main at most once per RunLoop
@@ -565,6 +592,7 @@ final class RadioState {
                     self.deactivateFreeDV()
                     // Keep the UDP receiver alive so port 60001 stays bound.
                     self.isPTTDown = false
+                    self.isAppPTTActive = false
                 }
             }
         }
@@ -752,6 +780,7 @@ final class RadioState {
             morsePlayer.play("73")
         }
         if connectionType == .lan { stopLanAudio() }
+        _scopeLock.lock(); _latestScopePoints = nil; _scopeDrainScheduled = false; _scopeLock.unlock()
         connection.disconnect()
     }
 
@@ -770,10 +799,12 @@ final class RadioState {
     }
 
     /// Cycle through available NR backends in order.
+    /// Passthrough is excluded from the cycle — use the NR popover to disable entirely.
     func cycleNoiseReductionBackend() {
-        guard !availableNoiseReductionBackends.isEmpty else { return }
-        let idx = availableNoiseReductionBackends.firstIndex(of: selectedNoiseReductionBackend) ?? -1
-        let next = availableNoiseReductionBackends[(idx + 1) % availableNoiseReductionBackends.count]
+        let cycleable = availableNoiseReductionBackends.filter { $0 != "Passthrough (disabled)" }
+        guard !cycleable.isEmpty else { return }
+        let idx = cycleable.firstIndex(of: selectedNoiseReductionBackend) ?? -1
+        let next = cycleable[(idx + 1) % cycleable.count]
         setNoiseReductionBackend(next)
         announceInfo("NR: \(next)")
     }
@@ -795,6 +826,7 @@ final class RadioState {
     }
 
     func setNoiseReductionBackend(_ backendName: String) {
+        let previousBackend = selectedNoiseReductionBackend
         selectedNoiseReductionBackend = backendName
         persistNoiseReductionSettings()
         // Preserve the user's current on/off state across backend switches.
@@ -802,12 +834,26 @@ final class RadioState {
         // previous state so NR doesn't silently turn off when switching modes.
         let wasEnabled = isNoiseReductionEnabled
         switch backendName {
+        case "RNNoise + ANR":
+            if let rnnoise = RNNoiseProcessor(), let anr = WDSPNoiseReductionProcessor(mode: .anr) {
+                let cascade = CascadeNoiseReductionProcessor(primary: rnnoise, secondary: anr)
+                cascade.isEnabled = wasEnabled
+                noiseProcessor = cascade
+                noiseReductionBackend = "RNNoise + ANR"
+                AppFileLogger.shared.log("NR backend switched to: RNNoise + ANR (enabled=\(wasEnabled))")
+            } else {
+                selectedNoiseReductionBackend = previousBackend
+                AppFileLogger.shared.log("NR backend switch to RNNoise + ANR failed (init returned nil) — keeping \(previousBackend)")
+            }
         case "WDSP EMNR":
             if let emnr = WDSPNoiseReductionProcessor(mode: .emnr) {
                 emnr.isEnabled = wasEnabled
                 noiseProcessor = emnr
                 noiseReductionBackend = "WDSP EMNR"
                 AppFileLogger.shared.log("NR backend switched to: WDSP EMNR (enabled=\(wasEnabled))")
+            } else {
+                selectedNoiseReductionBackend = previousBackend
+                AppFileLogger.shared.log("NR backend switch to WDSP EMNR failed (init returned nil) — keeping \(previousBackend)")
             }
         case "WDSP ANR":
             if let anr = WDSPNoiseReductionProcessor(mode: .anr) {
@@ -815,6 +861,9 @@ final class RadioState {
                 noiseProcessor = anr
                 noiseReductionBackend = "WDSP ANR"
                 AppFileLogger.shared.log("NR backend switched to: WDSP ANR (enabled=\(wasEnabled))")
+            } else {
+                selectedNoiseReductionBackend = previousBackend
+                AppFileLogger.shared.log("NR backend switch to WDSP ANR failed (init returned nil) — keeping \(previousBackend)")
             }
         case "RNNoise (in-process)":
             if let rnnoise = RNNoiseProcessor() {
@@ -823,6 +872,9 @@ final class RadioState {
                 isNoiseReductionEnabled = wasEnabled
                 noiseReductionBackend = rnnoise.backendDescription
                 AppFileLogger.shared.log("NR backend switched to: RNNoise (in-process) (enabled=\(wasEnabled))")
+            } else {
+                selectedNoiseReductionBackend = previousBackend
+                AppFileLogger.shared.log("NR backend switch to RNNoise (in-process) failed (init returned nil) — keeping \(previousBackend)")
             }
         default: // "Passthrough (disabled)"
             noiseProcessor = PassthroughNoiseReduction()
@@ -832,7 +884,7 @@ final class RadioState {
         }
     }
 
-    var isNoiseReductionAvailable: Bool { noiseProcessor.isAvailable }
+    private(set) var isNoiseReductionAvailable: Bool = false
 
 
     func setNoiseReductionStrength(_ value: Double) {
@@ -1373,8 +1425,8 @@ final class RadioState {
     func deactivateFreeDV() {
         guard freedvIsActive else { return }
 
-        // Stop TX if in progress.
-        if isPTTDown { setPTT(down: false) }
+        // Stop TX if app owns PTT — don't release if externally keyed.
+        if isAppPTTActive { setPTT(down: false) }
 
         freedvLanTxPipeline?.stop()
         freedvLanTxPipeline = nil
@@ -1700,6 +1752,16 @@ final class RadioState {
             return
         }
 
+        if core.hasPrefix("CK0"), core.count >= 15 {
+            // CK0 read-back: payload = YYMMDDHHMMSS (12 digits after "CK0")
+            let payload = String(core.dropFirst(3))
+            if let cb = pendingCKReadback {
+                pendingCKReadback = nil
+                cb(payload)
+            }
+            return
+        }
+
         if core.hasPrefix("OM"), core.count >= 4 {
             // Format: OM + P1 + P2 (P2 is a single hex digit: 1-9, A-F)
             let params = core.dropFirst(2)
@@ -1832,8 +1894,10 @@ final class RadioState {
             return
         }
 
-        if core.hasPrefix("TF1"), core.count >= 4 {
-            if let id = Int(core.dropFirst(3).prefix(1)) {
+        if core.hasPrefix("TF1"), core.count >= 6 {
+            // TF1 + P1(type, 1 char) + P2P2 (2-digit ID 00–99). We use type=0 (settings).
+            let typeChar = core.dropFirst(3).prefix(1)
+            if typeChar == "0", let id = Int(core.dropFirst(4).prefix(2)) {
                 txFilterLowCutID = id
             }
             return
@@ -1849,8 +1913,10 @@ final class RadioState {
             return
         }
 
-        if core.hasPrefix("TF2"), core.count >= 4 {
-            if let id = Int(core.dropFirst(3).prefix(1)) {
+        if core.hasPrefix("TF2"), core.count >= 7 {
+            // TF2 + P1(type, 1 char) + P2P2P2 (3-digit ID 000–999). We use type=0 (settings).
+            let typeChar = core.dropFirst(3).prefix(1)
+            if typeChar == "0", let id = Int(core.dropFirst(4).prefix(3)) {
                 txFilterHighCutID = id
             }
             return
@@ -1912,7 +1978,8 @@ final class RadioState {
                         memoryChannelMode = nil
                     }
 
-                    let name = String(core.suffix(10)).trimmingCharacters(in: .whitespaces)
+                    // Name starts after freq(11) + mode(1) + narrow(1) = offset 13 within `rest`.
+                    let name = String(rest.dropFirst(13).prefix(10)).trimmingCharacters(in: .whitespaces)
                     memoryChannelName = name.isEmpty ? nil : name
 
                     // Also populate the MemoryBrowserView array regardless of selected channel.
@@ -2252,6 +2319,7 @@ final class RadioState {
         if core == "RX" {
             isTransmitting = false
             isPTTDown = false
+            isAppPTTActive = false  // clear app PTT if radio went RX for any reason
             return
         }
 
@@ -2269,9 +2337,9 @@ final class RadioState {
     func setPTT(down: Bool, useMicAudio: Bool) {
         // Log synchronously: PTT debugging is high-value and these calls are infrequent.
         let hostLabel = currentHost.isEmpty ? "(empty)" : currentHost
-        AppFileLogger.shared.logSync("PTT: request down=\(down) useMicAudio=\(useMicAudio) isPTTDown=\(isPTTDown) host=\(hostLabel) status=\(connectionStatus)")
+        AppFileLogger.shared.logSync("PTT: request down=\(down) useMicAudio=\(useMicAudio) isAppPTTActive=\(isAppPTTActive) isPTTDown=\(isPTTDown) host=\(hostLabel) status=\(connectionStatus)")
 
-        guard down != isPTTDown else {
+        guard down != isAppPTTActive else {
             AppFileLogger.shared.logSync("PTT: ignored (already in requested state)")
             return
         }
@@ -2317,7 +2385,7 @@ final class RadioState {
             }
             AppFileLogger.shared.logSync("PTT: sending TX0;")
             send(KenwoodCAT.pttDown())
-            isPTTDown = true
+            isAppPTTActive = true
             announceInfo("PTT down")
         } else {
             AppFileLogger.shared.logSync("UI: PTT up")
@@ -2331,7 +2399,7 @@ final class RadioState {
             }
             AppFileLogger.shared.logSync("PTT: sending RX;")
             send(KenwoodCAT.pttUp())
-            isPTTDown = false
+            isAppPTTActive = false
             announceInfo("PTT up")
         }
     }
@@ -2339,7 +2407,7 @@ final class RadioState {
     // Generated audio TX: used by digital modes like FT8. This does not use the selected microphone.
     // Current implementation sends a test tone; FT8 waveform generation will be added later.
     func transmitGeneratedTestTone(toneHz: Double, durationSeconds: Double, amplitude: Double = 0.2) {
-        guard !isPTTDown else {
+        guard !isAppPTTActive else {
             AppFileLogger.shared.log("FT8: transmitGeneratedTestTone ignored (already TX)")
             return
         }
@@ -2366,7 +2434,7 @@ final class RadioState {
     // Accepts float PCM at 12 kHz, resamples to 16 kHz Int16, and queues for transmit.
     // PTT is automatically released when playback is complete.
     func transmitFT8Audio(samples12k: [Float], amplitude: Float = 0.15) {
-        guard !isPTTDown else {
+        guard !isAppPTTActive else {
             AppFileLogger.shared.log("FT8: transmitFT8Audio ignored (already TX)")
             return
         }
@@ -2387,7 +2455,7 @@ final class RadioState {
                 buf16k[i]  = Int16(max(-32767.0, min(32767.0, Double(s) * 32767.0)))
             }
             DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isPTTDown else { return }
+                guard let self, !self.isAppPTTActive else { return }
                 self.generatedTxBuffer    = buf16k
                 self.generatedTxBufferPos = 0
                 self.generatedTxState     = nil
@@ -2800,9 +2868,10 @@ final class RadioState {
             }
         case .software:
             switch softwareNRState {
-            case .off:  return "NR: Off"
-            case .anr:  return "ANR"
-            case .emnr: return "EMNR"
+            case .off:     return "NR: Off"
+            case .cascade: return "RNNoise+ANR"
+            case .anr:     return "ANR"
+            case .emnr:    return "EMNR"
             }
         }
     }
@@ -2825,9 +2894,10 @@ final class RadioState {
             softwareNRState = next
             setNoiseReduction(enabled: next != .off)
             switch next {
-            case .anr:  setNoiseReductionBackend("WDSP ANR")
-            case .emnr: setNoiseReductionBackend("WDSP EMNR")
-            case .off:  break
+            case .cascade: setNoiseReductionBackend("RNNoise + ANR")
+            case .anr:     setNoiseReductionBackend("WDSP ANR")
+            case .emnr:    setNoiseReductionBackend("WDSP EMNR")
+            case .off:     break
             }
             announceInfo("Software NR: \(next.rawValue)")
         }
@@ -2896,6 +2966,9 @@ final class RadioState {
     /// only valid responses are stored.
     func startMenuDiscovery() {
         guard !menuDiscoveryRunning else { return }
+        // Defensively cancel any leftover timer from a previous partial run.
+        _discoverySource?.cancel()
+        _discoverySource = nil
         menuDiscoveryRunning = true
         menuDiscoveryProgress = 0
         menuDiscoverySnapshot = []

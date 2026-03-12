@@ -38,11 +38,10 @@ final class RNNoiseProcessor: NoiseReductionProcessor {
         AppFileLogger.shared.log("RNNoise C: initialized ok frameSize=\(frameSize)")
     }
 
-    deinit {
+    nonisolated deinit {
         if let state {
             rnnoise_destroy(state)
         }
-        state = nil
     }
 
     func processFrame48kMono(_ frame: [Float]) -> [Float] {

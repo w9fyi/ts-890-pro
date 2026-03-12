@@ -16,6 +16,8 @@ import Observation
 @Observable
 final class WaterfallEngine {
 
+    nonisolated deinit {}
+
     static let pointsPerRow = 640
     static let displayRows  = 256
 

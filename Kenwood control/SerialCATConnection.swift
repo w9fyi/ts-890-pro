@@ -12,6 +12,8 @@ private let IOSSIOSPEED: UInt = 0x80085402
 /// No KNS authentication is needed; the radio responds to CAT immediately.
 final class SerialCATConnection: CATTransport {
 
+    nonisolated deinit {}
+
     // MARK: - CATTransport callbacks
 
     var onStatusChange: ((CATConnectionStatus) -> Void)?
@@ -129,8 +131,10 @@ final class SerialCATConnection: CATTransport {
         stopKeepalive()
         readSource?.cancel()
         readSource = nil
+        // Close fd synchronously so any already-queued sendRaw closures see fd = -1
+        // when they run. The cancel handler on readSource is now a no-op safety net.
+        if fd >= 0 { close(fd); fd = -1 }
         receiveBuffer.removeAll(keepingCapacity: true)
-        // fd is closed asynchronously in the DispatchSource cancel handler
     }
 
     private func readAvailable() {
@@ -177,6 +181,10 @@ final class SerialCATConnection: CATTransport {
             switch tickCount % 2 {
             case 0: self.sendRaw(KenwoodCAT.getAFGain()); self.sendRaw(KenwoodCAT.getRFGain())
             default: self.sendRaw(KenwoodCAT.getSquelchLevel())
+            }
+            // Re-assert AI4 every 30 s in case the radio reset it.
+            if tickCount % 6 == 5 {
+                self.sendRaw(KenwoodCAT.setAutoInformation(.onNonPersistent))
             }
             tickCount += 1
         }

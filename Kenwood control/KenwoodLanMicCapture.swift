@@ -7,6 +7,8 @@ import CoreAudio
 /// We use a HAL AudioUnit so the app can select a specific input device (e.g. Shure MVX2U),
 /// rather than relying on the system default input.
 final class KenwoodLanMicCapture {
+
+    nonisolated deinit {}
     enum CaptureError: LocalizedError {
         case unsupportedSampleRate(Double)
         case audioUnitError(OSStatus, String)

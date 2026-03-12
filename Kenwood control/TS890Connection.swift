@@ -38,6 +38,8 @@ final class TS890Connection {
     private let connectTimeoutInterval: TimeInterval = 15
     private var currentHost: String?
 
+    nonisolated deinit {}
+
     // MARK: - Helpers
 
     private func isASCII(_ s: String) -> Bool {
@@ -344,8 +346,8 @@ final class TS890Connection {
                                                     password: adminPassword), fd: fd)
                 }
             } else if normalized.hasPrefix("##CN0") {
-                onLog?("KNS: Connect rejected")
-                onError?("KNS connect rejected (##CN0)")
+                onLog?("KNS: Connect rejected (##CN0) — session may still be active")
+                onError?("KNS connect rejected — the radio may still have an active session. Wait a few seconds and try again.")
                 handleDisconnect()
             }
         case .sentID:
@@ -429,6 +431,11 @@ final class TS890Connection {
                 self.writeDirect(KenwoodCAT.getRFGain(), fd: fd)
             default:
                 self.writeDirect(KenwoodCAT.getSquelchLevel(), fd: fd)
+            }
+            // Re-assert AI4 every 30 s (every 6th tick) in case the radio reset it
+            // (e.g. after a menu save, firmware quirk, or brief power glitch).
+            if tickCount % 6 == 5 {
+                self.writeDirect(KenwoodCAT.setAutoInformation(.onNonPersistent), fd: fd)
             }
             tickCount += 1
         }

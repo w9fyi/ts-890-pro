@@ -15,6 +15,8 @@ import CoreAudio
 ///   4. Call stop() when done; send MS001; to restore the front-panel mic.
 final class AudioPassthrough {
 
+    nonisolated deinit {}
+
     enum PassthroughError: LocalizedError {
         case unsupportedSampleRate(Double)
         case audioUnitError(OSStatus, String)

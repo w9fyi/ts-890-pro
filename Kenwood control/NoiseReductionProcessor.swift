@@ -22,6 +22,8 @@ final class PassthroughNoiseReduction: NoiseReductionProcessor {
     var isAvailable: Bool { false }
     var isEnabled: Bool = false
 
+    nonisolated deinit {}
+
     func processFrame48kMono(_ frame: [Float]) -> [Float] { frame }
 
     func processFrame48kMonoInPlace(_ frame: inout [Float]) { /* no-op */ }
@@ -34,6 +36,8 @@ final class NoiseReductionProcessorProxy: NoiseReductionProcessor {
     var inner: any NoiseReductionProcessor
 
     init(inner: any NoiseReductionProcessor) { self.inner = inner }
+
+    nonisolated deinit {}
 
     var isAvailable: Bool { inner.isAvailable }
     var isEnabled: Bool {

@@ -2,6 +2,8 @@ import Foundation
 
 /// Receives 48 kHz mono float, frames to RNNoise-sized chunks, processes, and emits.
 final class LanAudioPipeline {
+
+    nonisolated deinit {}
     private let processor: any NoiseReductionProcessor
     private let frameSize: Int
     private var buffer: [Float] = []

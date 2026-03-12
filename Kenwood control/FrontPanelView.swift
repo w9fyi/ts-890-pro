@@ -261,7 +261,7 @@ private struct NRButton: View {
             .popover(isPresented: $showPopover, arrowEdge: .bottom) {
                 NRPopoverContent(radio: radio)
                     .padding(12)
-                    .frame(minWidth: 220)
+                    .frame(minWidth: 300)
             }
             .contextMenu {
                 Button("NR Settings…") { showPopover = true }
@@ -306,10 +306,32 @@ private struct NRPopoverContent: View {
                         Button(state.rawValue) {
                             radio.softwareNRState = state
                             radio.setNoiseReduction(enabled: state != .off)
-                            if state == .anr  { radio.setNoiseReductionBackend("WDSP ANR") }
-                            if state == .emnr { radio.setNoiseReductionBackend("WDSP EMNR") }
+                            switch state {
+                            case .cascade: radio.setNoiseReductionBackend("RNNoise + ANR")
+                            case .anr:     radio.setNoiseReductionBackend("WDSP ANR")
+                            case .emnr:    radio.setNoiseReductionBackend("WDSP EMNR")
+                            case .off:     break
+                            }
                         }
                         .buttonStyle(CompactButtonStyle(isActive: radio.softwareNRState == state))
+                    }
+                }
+
+                if radio.isNoiseReductionEnabled {
+                    HStack(spacing: 8) {
+                        Text("Strength")
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { radio.noiseReductionStrength },
+                            set: { radio.setNoiseReductionStrength($0) }
+                        ), in: 0...1, step: 0.05)
+                        .frame(minWidth: 120)
+                        .accessibilityLabel("Noise reduction strength")
+                        .accessibilityValue("\(Int(radio.noiseReductionStrength * 100)) percent")
+                        Text("\(Int(radio.noiseReductionStrength * 100))%")
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(width: 36, alignment: .trailing)
+                            .accessibilityHidden(true)
                     }
                 }
             }
@@ -767,10 +789,25 @@ private struct ControlsRow: View {
                 ritXitControl
             }
 
-            // CW keyer messages — visible when in CW or CW-R (not FSK)
+            // CW keyer messages and break-in — visible when in CW or CW-R (not FSK)
             if radio.operatingMode == .cw || radio.operatingMode == .cwR {
                 Divider().padding(.vertical, 1)
-                CWKeyerRow(radio: radio)
+                HStack(spacing: 8) {
+                    CWKeyerRow(radio: radio)
+                    Divider().frame(height: 18)
+                    Button("BK: \(radio.cwBreakInMode?.label ?? "---")") {
+                        radio.cycleCWBreakInMode()
+                    }
+                    .buttonStyle(CompactButtonStyle(isActive: radio.cwBreakInMode == .on))
+                    .accessibilityLabel("CW break-in mode")
+                    .accessibilityValue(radio.cwBreakInMode?.label ?? "unknown")
+                    .accessibilityHint("Tap to cycle: Off, Semi, Full")
+                    .contextMenu {
+                        ForEach(KenwoodCAT.CWBreakInMode.allCases) { mode in
+                            Button("Break-in: \(mode.label)") { radio.setCWBreakInMode(mode) }
+                        }
+                    }
+                }
             }
         }
         .controlSize(.small)
@@ -991,46 +1028,103 @@ private struct MemoriesButton: View {
 // MARK: - Clock sync row
 
 /// Dedicated row for syncing the radio clock from NTP.
-/// Left-click syncs immediately using the stored server.
-/// Right-click opens a persistent popover to change the NTP server address.
+/// Left-click syncs immediately using the stored server and timezone.
+/// Right-click opens a persistent popover to change the NTP server and clock timezone.
 private struct ClockSyncRow: View {
     let radio: RadioState
 
-    @AppStorage("ntpServer") private var ntpServer: String = NTPClient.defaultServer
-    @State private var showPopover   = false
-    @State private var statusMessage = ""
-    @State private var isSyncing     = false
-    @State private var editServer    = ""
+    @AppStorage("ntpServer")         private var ntpServer:         String = NTPClient.defaultServer
+    @AppStorage("clockTimezoneID")   private var clockTimezoneID:   String = "UTC"
+    @AppStorage("radioManagesNTP")   private var radioManagesNTP:   Bool   = false
+    @State private var showPopover        = false
+    @State private var statusMessage      = ""
+    @State private var isSyncing          = false
+    @State private var editServer         = ""
+    @State private var editTimezoneID     = ""
+    @State private var editRadioManagesNTP = false
+
+    // Curated timezone list for the picker.
+    // "System" resolves to TimeZone.current at sync time.
+    private static let timezoneIDs = [
+        "UTC", "System",
+        "America/Anchorage", "America/Chicago", "America/Denver",
+        "America/Honolulu", "America/Los_Angeles", "America/New_York",
+        "America/Sao_Paulo",
+        "Europe/London", "Europe/Paris", "Europe/Berlin",
+        "Europe/Helsinki", "Europe/Moscow",
+        "Asia/Dubai", "Asia/Kolkata", "Asia/Bangkok",
+        "Asia/Shanghai", "Asia/Tokyo",
+        "Australia/Perth", "Australia/Sydney",
+        "Pacific/Auckland",
+    ]
+
+    private var buttonLabel: String {
+        isSyncing ? "Syncing…" : (radioManagesNTP ? "Set Timezone" : "Sync Clock")
+    }
 
     var body: some View {
         HStack(spacing: 8) {
-            Button(isSyncing ? "Syncing…" : "Sync Clock") {
-                syncNow()
-            }
+            Button(buttonLabel) { syncNow() }
             .buttonStyle(CompactButtonStyle(isActive: isSyncing))
             .disabled(isSyncing || radio.connectionStatus != "Connected")
-            .accessibilityLabel("Sync radio clock from NTP")
-            .accessibilityHint("Sets the radio UTC time and date from \(ntpServer)")
+            .accessibilityLabel(radioManagesNTP ? "Set radio clock timezone" : "Sync radio clock from NTP")
+            .accessibilityHint(radioManagesNTP
+                ? "Sets timezone to \(timezoneLabel(clockTimezoneID)) and triggers radio NTP sync"
+                : "Sets the radio clock from \(ntpServer), timezone \(timezoneLabel(clockTimezoneID))")
             .popover(isPresented: $showPopover, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("NTP Server").font(.headline)
-                    TextField("e.g. pool.ntp.org", text: $editServer)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 220)
-                        .accessibilityLabel("NTP server address")
-                        .onSubmit { commitServer() }
+
+                    // --- Time source ---
+                    Text("Time Source").font(.headline)
+                    Toggle("Radio manages time via NTP", isOn: $editRadioManagesNTP)
+                        .accessibilityLabel("Radio manages time via NTP")
+                        .accessibilityHint("When on, the radio syncs its own clock. App only sets the timezone.")
+
+                    if editRadioManagesNTP {
+                        Text("The radio will use its configured NTP server. App sets timezone only.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        TextField("Mac NTP server, e.g. pool.ntp.org", text: $editServer)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(minWidth: 260)
+                            .accessibilityLabel("Mac NTP server address")
+                            .onSubmit { commitAndClose() }
+                    }
+
+                    Divider()
+
+                    // --- Timezone ---
+                    Text("Clock Timezone").font(.headline)
+                    Text("Radio local clock will be set to this timezone.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Picker("Timezone", selection: $editTimezoneID) {
+                        ForEach(Self.timezoneIDs, id: \.self) { id in
+                            Text(timezoneLabel(id)).tag(id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityLabel("Clock timezone")
+
                     HStack {
-                        Button("Save") { commitServer() }
+                        Button("Save") { commitAndClose() }
                         Button("Cancel") { showPopover = false }
                     }
                 }
                 .padding(12)
-                .frame(minWidth: 260)
+                .frame(minWidth: 300)
                 .controlSize(.small)
+                .onAppear {
+                    editServer          = ntpServer
+                    editTimezoneID      = clockTimezoneID
+                    editRadioManagesNTP = radioManagesNTP
+                }
             }
             .contextMenu {
-                Button("NTP Server: \(ntpServer)") { editServer = ntpServer; showPopover = true }
-                Button("Sync Now")                  { syncNow() }
+                Button(radioManagesNTP ? "Mode: Radio NTP" : "NTP Server: \(ntpServer)") { showPopover = true }
+                Button("Timezone: \(timezoneLabel(clockTimezoneID))") { showPopover = true }
+                Button(radioManagesNTP ? "Set Timezone" : "Sync Now") { syncNow() }
                     .disabled(isSyncing || radio.connectionStatus != "Connected")
             }
 
@@ -1046,10 +1140,31 @@ private struct ClockSyncRow: View {
         .controlSize(.small)
     }
 
-    private func commitServer() {
+    private func commitAndClose() {
         let trimmed = editServer.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { ntpServer = trimmed }
+        clockTimezoneID  = editTimezoneID
+        radioManagesNTP  = editRadioManagesNTP
         showPopover = false
+    }
+
+    private func timezoneLabel(_ id: String) -> String {
+        if id == "UTC"    { return "UTC (+00:00)" }
+        if id == "System" { return "System — \(offsetLabel(for: TimeZone.current))" }
+        guard let tz = TimeZone(identifier: id) else { return id }
+        let city = id.components(separatedBy: "/").last?
+            .replacingOccurrences(of: "_", with: " ") ?? id
+        return "\(city) — \(offsetLabel(for: tz))"
+    }
+
+    private func offsetLabel(for tz: TimeZone) -> String {
+        let sec = tz.secondsFromGMT()
+        let sign = sec >= 0 ? "+" : "-"
+        let h = abs(sec) / 3600
+        let m = (abs(sec) % 3600) / 60
+        return m > 0
+            ? String(format: "UTC%@%d:%02d", sign, h, m)
+            : String(format: "UTC%@%d:00", sign, h)
     }
 
     private func syncNow() {
@@ -1057,22 +1172,90 @@ private struct ClockSyncRow: View {
         isSyncing = true
         statusMessage = ""
 
-        NTPClient.queryTime(server: ntpServer) { result in
+        let tz: TimeZone = clockTimezoneID == "System"
+            ? TimeZone.current
+            : (TimeZone(identifier: clockTimezoneID) ?? .gmt)
+        let offsetMin = tz.secondsFromGMT() / 60
+
+        if radioManagesNTP {
+            // Radio manages its own time via NTP.
+            // Just set the timezone offset and trigger the radio's NTP sync.
+            radio.send(KenwoodCAT.setLocalClockTimezone(offsetMinutes: offsetMin))
+            radio.send(KenwoodCAT.triggerRadioNTPSync())
             isSyncing = false
+            statusMessage = "✓ Timezone set, radio syncing"
+            fpAnnounce("Timezone set to \(tz.identifier). Radio NTP sync triggered.")
+            return
+        }
+
+        // App-managed: fetch time from Mac NTP, then set CK0 + CK2 with readback verification.
+        NTPClient.queryTime(server: ntpServer) { result in
             switch result {
-            case .success(let date):
+            case .success(let utcDate):
                 let cal = Calendar(identifier: .gregorian)
-                var comps = cal.dateComponents(in: TimeZone(identifier: "UTC")!, from: date)
+                let comps = cal.dateComponents(in: tz, from: utcDate)
                 guard let h = comps.hour, let m = comps.minute, let s = comps.second,
                       let yr = comps.year, let mo = comps.month, let d = comps.day else {
+                    isSyncing = false
                     statusMessage = "✕ Bad date"
                     return
                 }
-                radio.send(KenwoodCAT.setClockTime(hour: h, minute: m, second: s))
-                radio.send(KenwoodCAT.setClockDate(year: yr, month: mo, day: d))
-                statusMessage = String(format: "✓ %04d-%02d-%02d %02d:%02d:%02dZ", yr, mo, d, h, m, s)
-                fpAnnounce("Radio clock synced to \(String(format: "%02d:%02d:%02d", h, m, s)) UTC")
+                let tzOffsetMin = tz.secondsFromGMT(for: utcDate) / 60
+                radio.send(KenwoodCAT.setClockDateTime(year: yr, month: mo, day: d,
+                                                       hour: h, minute: m, second: s))
+                radio.send(KenwoodCAT.setLocalClockTimezone(offsetMinutes: tzOffsetMin))
+
+                // Verification: read back CK0 after 300 ms.
+                let sentDate = utcDate
+
+                let timeoutItem = DispatchWorkItem {
+                    radio.pendingCKReadback = nil
+                    isSyncing = false
+                    statusMessage = "✕ No response from radio"
+                    fpAnnounce("Clock sync: no response from radio")
+                }
+
+                radio.pendingCKReadback = { payload in
+                    timeoutItem.cancel()
+                    isSyncing = false
+                    guard payload.count >= 12,
+                          let rYY = Int(payload.prefix(2)),
+                          let rMo = Int(payload.dropFirst(2).prefix(2)),
+                          let rD  = Int(payload.dropFirst(4).prefix(2)),
+                          let rH  = Int(payload.dropFirst(6).prefix(2)),
+                          let rMi = Int(payload.dropFirst(8).prefix(2)),
+                          let rS  = Int(payload.dropFirst(10).prefix(2)) else {
+                        statusMessage = "✕ Unreadable response"
+                        fpAnnounce("Clock sync: unreadable response")
+                        return
+                    }
+                    var rc = DateComponents()
+                    rc.year = 2000 + rYY; rc.month = rMo; rc.day = rD
+                    rc.hour = rH; rc.minute = rMi; rc.second = rS
+                    rc.timeZone = tz
+                    if let returnedDate = Calendar(identifier: .gregorian).date(from: rc),
+                       abs(returnedDate.timeIntervalSince(sentDate)) < 10 {
+                        let sign = tzOffsetMin >= 0 ? "+" : "-"
+                        let oh = abs(tzOffsetMin) / 60; let om2 = abs(tzOffsetMin) % 60
+                        let tzSuffix = tzOffsetMin == 0 ? "Z"
+                            : (om2 > 0 ? String(format: "%@%d:%02d", sign, oh, om2)
+                                       : String(format: "%@%d:00", sign, oh))
+                        statusMessage = String(format: "✓ %04d-%02d-%02d %02d:%02d:%02d%@",
+                                               2000 + rYY, rMo, rD, rH, rMi, rS, tzSuffix)
+                        fpAnnounce("Radio clock synced to \(String(format: "%02d:%02d:%02d", rH, rMi, rS)) \(tz.identifier)")
+                    } else {
+                        statusMessage = "✕ Radio rejected sync (NTP auto-sync may be on)"
+                        fpAnnounce("Clock sync rejected by radio")
+                    }
+                }
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    radio.send(KenwoodCAT.getClockDateTime())
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: timeoutItem)
+
             case .failure(let err):
+                isSyncing = false
                 statusMessage = "✕ \(err.localizedDescription)"
                 fpAnnounce("Clock sync failed: \(err.localizedDescription)")
             }

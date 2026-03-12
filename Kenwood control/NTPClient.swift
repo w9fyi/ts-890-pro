@@ -26,6 +26,8 @@ enum NTPError: Error, LocalizedError {
 
 final class NTPClient {
 
+    nonisolated deinit {}
+
     /// Default public NTP pool server.
     static let defaultServer = "pool.ntp.org"
 

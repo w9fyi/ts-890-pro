@@ -3,6 +3,8 @@ import Foundation
 /// Minimal always-on file logger for VoiceOver-friendly debugging.
 /// Writes to /tmp so it works with the App Sandbox without extra entitlements.
 final class AppFileLogger {
+
+    nonisolated deinit {}
     static let shared = AppFileLogger()
 
     private let queue = DispatchQueue(label: "AppFileLogger.queue")

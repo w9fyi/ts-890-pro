@@ -5,6 +5,8 @@ import AVFoundation
 /// no radio transmission is involved; everything stays local on the Mac.
 final class MorseAudioPlayer {
 
+    nonisolated deinit {}
+
     // MARK: - Parameters
 
     private let frequency: Double = 700.0   // Hz — classic CW sidetone pitch

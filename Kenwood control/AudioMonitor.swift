@@ -3,6 +3,8 @@ import AudioToolbox
 import CoreAudio
 
 final class AudioMonitor {
+
+    nonisolated deinit {}
     enum MonitorError: LocalizedError {
         case missingDevices
         case unsupportedSampleRate(Double)

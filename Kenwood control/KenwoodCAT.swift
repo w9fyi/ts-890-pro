@@ -437,9 +437,10 @@ enum KenwoodCAT {
     // MARK: - AGC (GC)
 
     enum AGCMode: Int, CaseIterable, Identifiable {
-        case off = 0, fast = 1, mid = 2, slow = 3
+        // Raw values match the GC command: 0=OFF, 1=SLOW, 2=MID, 3=FAST (per PC Command Ref).
+        case off = 0, slow = 1, mid = 2, fast = 3
         var id: Int { rawValue }
-        var label: String { ["OFF", "FAST", "MID", "SLOW"][rawValue] }
+        var label: String { ["OFF", "SLOW", "MID", "FAST"][rawValue] }
         var next: AGCMode { AGCMode(rawValue: (rawValue + 1) % 4)! }
     }
 
@@ -523,7 +524,8 @@ enum KenwoodCAT {
 
     static func getMonitorLevel() -> String { "ML;" }
     static func setMonitorLevel(_ level: Int) -> String {
-        let clamped = max(0, min(level, 100))
+        // Manual range: 000–020 (TS-890S PC Command Reference).
+        let clamped = max(0, min(level, 20))
         return String(format: "ML%03d;", clamped)
     }
 
@@ -537,17 +539,20 @@ enum KenwoodCAT {
 
     static func getCWSpeed() -> String { "KS;" }
     static func setCWSpeed(_ wpm: Int) -> String {
-        let clamped = max(4, min(wpm, 100))
+        // Manual range: 004–060 WPM (TS-890S PC Command Reference).
+        let clamped = max(4, min(wpm, 60))
         return String(format: "KS%03d;", clamped)
     }
 
     // MARK: - CW Break-in (BI)
 
     enum CWBreakInMode: Int, CaseIterable, Identifiable {
-        case off = 0, semi = 1, full = 2
+        // BI only accepts P1=0 (OFF) or P1=1 (ON) — BI2 returns ?; on TS-890S firmware.
+        // Semi/full delay timing is configured via the EX menu, not BI.
+        case off = 0, on = 1
         var id: Int { rawValue }
-        var label: String { ["Off", "Semi", "Full"][rawValue] }
-        var next: CWBreakInMode { CWBreakInMode(rawValue: (rawValue + 1) % 3)! }
+        var label: String { ["Off", "On"][rawValue] }
+        var next: CWBreakInMode { self == .off ? .on : .off }
     }
 
     static func getCWBreakIn() -> String { "BI;" }
@@ -621,17 +626,33 @@ enum KenwoodCAT {
         return "SM\(type.smIndex);"
     }
 
-    // MARK: - Clock (CK)
-    // CK3 = time (HHMMSS, UTC), CK4 = date (YYYYMMDD).
-    // CK5 = UTC offset — read-only from this app (user configures on radio).
+    // MARK: - Clock (CK) — verified against PC Command Reference Rev.1
+    // CK0 = local clock date+time (combined, 2-digit year).
+    // CK2 = local clock timezone offset (000–112, step=15 min, 056=UTC).
+    // NOTE: CK3 = secondary clock timezone, CK4 = secondary clock identifier (NOT time/date).
+    // CK0 is silently ignored by the radio when NTP auto-sync (CK6=1) is enabled.
 
-    /// Set radio UTC time.  `CK3HHMMSS;`
-    static func setClockTime(hour: Int, minute: Int, second: Int) -> String {
-        String(format: "CK3%02d%02d%02d;", hour, minute, second)
+    /// Set radio local clock date and time.  `CK0YYMMDDHHMMSS;`
+    /// Year is 2-digit (18–99). Converts 4-digit year automatically.
+    static func setClockDateTime(year: Int, month: Int, day: Int,
+                                  hour: Int, minute: Int, second: Int) -> String {
+        let yy = year % 100
+        return String(format: "CK0%02d%02d%02d%02d%02d%02d;", yy, month, day, hour, minute, second)
     }
 
-    /// Set radio UTC date.  `CK4YYYYMMDD;`
-    static func setClockDate(year: Int, month: Int, day: Int) -> String {
-        String(format: "CK4%04d%02d%02d;", year, month, day)
+    /// Set local clock timezone offset.  `CK2NNN;`
+    /// offsetMinutes: UTC offset in minutes (e.g. −300 for UTC−5, +330 for UTC+5:30).
+    /// Radio scale: 000–112, step = 15 min, 056 = UTC.
+    static func setLocalClockTimezone(offsetMinutes: Int) -> String {
+        let steps = 56 + (offsetMinutes / 15)
+        let clamped = min(112, max(0, steps))
+        return String(format: "CK2%03d;", clamped)
     }
+
+    /// Query radio local clock date and time.  `CK0;`
+    static func getClockDateTime() -> String { "CK0;" }
+
+    /// Trigger the radio to fetch time from its configured NTP server immediately.  `CK8;`
+    /// Radio must have CK6=1 (auto-sync ON) and a valid NTP server set via CK7.
+    static func triggerRadioNTPSync() -> String { "CK8;" }
 }

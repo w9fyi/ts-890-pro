@@ -3,6 +3,8 @@ import AudioToolbox
 import CoreAudio
 
 final class AudioOutputPlayer {
+
+    nonisolated deinit {}
     enum PlayerError: LocalizedError {
         case noDefaultOutput
         case audioUnitError(OSStatus, String)

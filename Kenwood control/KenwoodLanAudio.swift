@@ -89,7 +89,7 @@ final class KenwoodLanAudioReceiver {
     private let txSSRC: UInt32 = 0x38393000 // "890\0"
     private var txPacketCount: Int = 0
 
-    private var pendingSample: Float?
+    private let resampler = PolyphaseResampler16To48()
     private var lastSeq: UInt16?
 
     func start(host: String, port: UInt16 = 60001) throws {
@@ -155,7 +155,7 @@ final class KenwoodLanAudioReceiver {
         readSource = source
         source.resume()
 
-        pendingSample = nil
+        resampler.reset()
         lastSeq = nil
         onLog?("LAN audio receiver started on UDP \(port) for host \(host)")
         // Some implementations only start sending audio after they observe inbound UDP from the client.
@@ -177,7 +177,7 @@ final class KenwoodLanAudioReceiver {
         }
         expectedHostAddr = nil
         destAddr = nil
-        pendingSample = nil
+        resampler.reset()
         lastSeq = nil
     }
 
@@ -275,17 +275,18 @@ final class KenwoodLanAudioReceiver {
 
             onPacket?(hdr.sequenceNumber, hdr.ssrc, payloadLen)
 
-            // Packet loss concealment: if seq jumps, insert silence for each missing packet.
+            // Packet loss concealment: if seq jumps, feed silence through the resampler
+            // for each missing packet so its delay line stays in sync, then emit the output
+            // (which naturally decays from the previous audio tail toward zero).
             if let lastSeq {
                 let expected = lastSeq &+ 1
                 if hdr.sequenceNumber != expected {
                     let delta = Int(hdr.sequenceNumber &- expected)
-                    // Clamp to avoid runaway on wrap/large jumps.
                     let missing = max(0, min(delta, 10))
                     if missing > 0 {
-                        // Each missing packet is ~20 ms => ~960 samples at 48k after upsample.
+                        let silence16k = [Float](repeating: 0.0, count: 320)
                         for _ in 0..<missing {
-                            onAudio48kMono?(Array(repeating: 0, count: 960))
+                            onAudio48kMono?(resampler.process(silence16k))
                         }
                     }
                 }
@@ -308,32 +309,11 @@ final class KenwoodLanAudioReceiver {
             // Deliver raw Int16 to FreeDV modem decoder if active.
             if let onModem = onModemSamplesInt16 { onModem(samplesInt16) }
 
-            // Upsample 16 kHz -> 48 kHz (factor 3) with linear interpolation between samples.
-            // We intentionally hold one sample between calls so the steady-state output is 960 samples/packet.
-            var out48k: [Float] = []
-            out48k.reserveCapacity(960)
-
-            if let pending = pendingSample, let first = samples16k.first {
-                appendUpsampleTriplet(from: pending, to: first, into: &out48k)
-            }
-            if samples16k.count >= 2 {
-                for i in 0..<(samples16k.count - 1) {
-                    appendUpsampleTriplet(from: samples16k[i], to: samples16k[i + 1], into: &out48k)
-                }
-            }
-            pendingSample = samples16k.last
-
-            if !out48k.isEmpty {
-                onAudio48kMono?(out48k)
-            }
+            // Upsample 16 kHz → 48 kHz using polyphase FIR resampler.
+            // Kaiser-windowed sinc, 8 taps/phase, cutoff 8 kHz, ~60 dB stopband.
+            // Returns exactly 960 samples (= 320 × 3).
+            onAudio48kMono?(resampler.process(samples16k))
         }
-    }
-
-    private func appendUpsampleTriplet(from a: Float, to b: Float, into out: inout [Float]) {
-        out.append(a)
-        let d = b - a
-        out.append(a + d / 3.0)
-        out.append(a + 2.0 * d / 3.0)
     }
 
     private func sendProbe() {

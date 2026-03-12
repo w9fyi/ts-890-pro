@@ -155,6 +155,8 @@ struct MIDISourceInfo: Identifiable, Hashable {
 @Observable
 final class MIDIController {
 
+    nonisolated deinit {}
+
     static let shared = MIDIController()
 
     // MARK: Published
@@ -483,22 +485,10 @@ final class MIDIController {
             radio.send(KenwoodCAT.setMemoryChannelNumber(newChannel))
 
         case .pttToggle:
-            if radio.isPTTDown {
-                radio.send(KenwoodCAT.pttUp())
-                radio.isPTTDown = false
-            } else {
-                radio.send(KenwoodCAT.pttDown())
-                radio.isPTTDown = true
-            }
+            radio.setPTT(down: !radio.isAppPTTActive, useMicAudio: true)
 
         case .pttHold:
-            if clicks > 0 {
-                radio.send(KenwoodCAT.pttDown())
-                radio.isPTTDown = true
-            } else {
-                radio.send(KenwoodCAT.pttUp())
-                radio.isPTTDown = false
-            }
+            radio.setPTT(down: clicks > 0, useMicAudio: true)
         }
     }
 }

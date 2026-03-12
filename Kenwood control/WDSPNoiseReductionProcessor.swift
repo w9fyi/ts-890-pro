@@ -34,7 +34,7 @@ final class WDSPNoiseReductionProcessor: NoiseReductionProcessor {
         AppFileLogger.shared.log("WDSP \(mode == .emnr ? "EMNR" : "ANR"): initialized at \(sampleRate) Hz")
     }
 
-    deinit {
+    nonisolated deinit {
         if let c = emnrCtx { wdsp_emnr_destroy(c) }
         if let c = anrCtx  { wdsp_anr_destroy(c) }
     }

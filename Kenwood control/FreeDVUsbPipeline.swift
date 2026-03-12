@@ -8,6 +8,8 @@ import AVFoundation
 /// TX: System mic (48 kHz) → FreeDV encode → USB AUDIO CODEC output (48 kHz)
 final class FreeDVUsbPipeline {
 
+    nonisolated deinit {}
+
     enum PipelineError: LocalizedError {
         case audioUnitError(OSStatus, String)
         case missingDevice

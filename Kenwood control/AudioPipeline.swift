@@ -1,6 +1,8 @@
 import Foundation
 
 final class AudioFrameBuffer {
+
+    nonisolated deinit {}
     private var buffer: [Float] = []
     private let frameSize: Int
 

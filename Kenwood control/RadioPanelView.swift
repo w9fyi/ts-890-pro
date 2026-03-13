@@ -14,10 +14,11 @@
 //    7. RIT / XIT
 //    8. CW Controls (CW/CW-R modes only)
 //    9. TX / VOX / Monitor
-//   10. Split Offset
-//   11. EQ (DisclosureGroup)
-//   12. Menu Settings (DisclosureGroup + link)
-//   13. Memory (channel recall, program)
+//   10. TX Modulation Sources (MS + DV)
+//   11. Split Offset
+//   12. EQ (DisclosureGroup)
+//   13. Menu Settings (DisclosureGroup + link)
+//   14. Memory (channel recall, program)
 //
 
 import SwiftUI
@@ -112,12 +113,17 @@ struct RadioPanelView: View {
 
                 Divider()
 
-                // Section 10: Split Offset
+                // Section 10: TX Modulation Sources
+                txModulationSection
+
+                Divider()
+
+                // Section 11: Split Offset
                 splitOffsetSection
 
                 Divider()
 
-                // Section 11: EQ
+                // Section 12: EQ
                 DisclosureGroup("Equalizer") {
                     eqSection
                         .padding(.top, 8)
@@ -126,7 +132,7 @@ struct RadioPanelView: View {
 
                 Divider()
 
-                // Section 12: Menu Settings
+                // Section 13: Menu Settings
                 DisclosureGroup("Menu Settings") {
                     menuSettingsSection
                         .padding(.top, 8)
@@ -135,7 +141,7 @@ struct RadioPanelView: View {
 
                 Divider()
 
-                // Section 13: Memory
+                // Section 14: Memory
                 memorySection
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -292,11 +298,15 @@ extension RadioPanelView {
         GroupBox("Receive DSP") {
             VStack(alignment: .leading, spacing: 10) {
 
-                // Row 1: NB, Notch, BC
+                // Row 1: NB, NB2, Notch, BC
                 HStack(spacing: 8) {
                     PanelToggleButton(label: "NB", isOn: radio.noiseBlankerEnabled ?? false) {
                         radio.setNoiseBlankerEnabled(!(radio.noiseBlankerEnabled ?? false))
                     }
+                    PanelToggleButton(label: "NB2", isOn: radio.noiseBlanker2Enabled ?? false) {
+                        radio.setNoiseBlanker2Enabled(!(radio.noiseBlanker2Enabled ?? false))
+                    }
+                    .accessibilityHint("Noise blanker 2 on/off")
                     PanelToggleButton(label: "NOTCH", isOn: radio.isNotchEnabled ?? false) {
                         radio.setNotchEnabled(!(radio.isNotchEnabled ?? false))
                     }
@@ -386,6 +396,139 @@ extension RadioPanelView {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .accessibilityLabel("Software NR backend: \(radio.noiseReductionBackend)")
+                }
+
+                // Row 5: Notch frequency + bandwidth (when notch is on)
+                if radio.isNotchEnabled == true {
+                    SliderWithSteppers(
+                        label: "Notch Freq",
+                        value: Binding(
+                            get: { Double(radio.notchFrequency ?? 128) },
+                            set: { radio.setNotchFrequencyDebounced(Int($0)) }
+                        ),
+                        range: 0...255,
+                        fineStep: 1,
+                        coarseStep: 16,
+                        displayFormat: { "\(Int($0))" },
+                        accessibilityUnit: "raw position"
+                    )
+
+                    PanelCycleButton(
+                        label: "Notch BW",
+                        value: radio.notchBandwidth?.label ?? "---"
+                    ) {
+                        let bw = radio.notchBandwidth ?? .normal
+                        let next = KenwoodCAT.NotchBandwidth(rawValue: (bw.rawValue + 1) % 3) ?? .normal
+                        radio.setNotchBandwidth(next)
+                    } contextItems: {
+                        ForEach(KenwoodCAT.NotchBandwidth.allCases) { bw in
+                            Button("Notch BW: \(bw.label)") { radio.setNotchBandwidth(bw) }
+                        }
+                    }
+                    .accessibilityHint("Notch bandwidth. Right-click or VO+Shift+M to jump to a value.")
+                }
+
+                // Row 6: NR level parameters
+                SliderWithSteppers(
+                    label: "NR Level",
+                    value: Binding(
+                        get: { Double(radio.nrLevel ?? 5) },
+                        set: { radio.setNRLevelDebounced(Int($0)) }
+                    ),
+                    range: 1...10,
+                    fineStep: 1,
+                    coarseStep: 3,
+                    displayFormat: { "\(Int($0))" },
+                    accessibilityUnit: "level"
+                )
+
+                SliderWithSteppers(
+                    label: "NR2 Time",
+                    value: Binding(
+                        get: { Double(radio.nr2TimeConstant ?? 4) },
+                        set: { radio.setNR2TimeConstantDebounced(Int($0)) }
+                    ),
+                    range: 0...9,
+                    fineStep: 1,
+                    coarseStep: 3,
+                    displayFormat: { "\(Int($0))" },
+                    accessibilityUnit: "time constant"
+                )
+
+                // Row 7: NB1 level
+                SliderWithSteppers(
+                    label: "NB1 Level",
+                    value: Binding(
+                        get: { Double(radio.noiseBlanker1Level ?? 10) },
+                        set: { radio.setNoiseBlanker1LevelDebounced(Int($0)) }
+                    ),
+                    range: 1...20,
+                    fineStep: 1,
+                    coarseStep: 5,
+                    displayFormat: { "\(Int($0))" },
+                    accessibilityUnit: "level"
+                )
+
+                // Row 8: NB2 detail (when NB2 is on)
+                if radio.noiseBlanker2Enabled == true {
+                    DisclosureGroup("NB2 Settings") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            PanelCycleButton(
+                                label: "NB2 Type",
+                                value: radio.noiseBlanker2Type?.label ?? "---"
+                            ) {
+                                let t = radio.noiseBlanker2Type ?? .typeA
+                                let next = KenwoodCAT.NoiseBlanker2Type(rawValue: (t.rawValue + 1) % 2) ?? .typeA
+                                radio.setNoiseBlanker2Type(next)
+                            } contextItems: {
+                                ForEach(KenwoodCAT.NoiseBlanker2Type.allCases) { t in
+                                    Button("NB2 Type: \(t.label)") { radio.setNoiseBlanker2Type(t) }
+                                }
+                            }
+                            .accessibilityHint("NB2 type A or B. Right-click or VO+Shift+M to jump to a value.")
+
+                            SliderWithSteppers(
+                                label: "NB2 Level",
+                                value: Binding(
+                                    get: { Double(radio.noiseBlanker2Level ?? 5) },
+                                    set: { radio.setNoiseBlanker2LevelDebounced(Int($0)) }
+                                ),
+                                range: 1...10,
+                                fineStep: 1,
+                                coarseStep: 3,
+                                displayFormat: { "\(Int($0))" },
+                                accessibilityUnit: "level"
+                            )
+
+                            SliderWithSteppers(
+                                label: "NB2 Depth",
+                                value: Binding(
+                                    get: { Double(radio.noiseBlanker2Depth ?? 10) },
+                                    set: { radio.setNoiseBlanker2DepthDebounced(Int($0)) }
+                                ),
+                                range: 1...20,
+                                fineStep: 1,
+                                coarseStep: 5,
+                                displayFormat: { "\(Int($0))" },
+                                accessibilityUnit: "depth"
+                            )
+
+                            SliderWithSteppers(
+                                label: "NB2 Width",
+                                value: Binding(
+                                    get: { Double(radio.noiseBlanker2Width ?? 5) },
+                                    set: { radio.setNoiseBlanker2WidthDebounced(Int($0)) }
+                                ),
+                                range: 1...20,
+                                fineStep: 1,
+                                coarseStep: 5,
+                                displayFormat: { "\(Int($0))" },
+                                accessibilityUnit: "width"
+                            )
+                        }
+                        .padding(.top, 6)
+                    }
+                    .accessibilityLabel("N B 2 settings, expandable group")
                 }
             }
             .padding(.top, 4)
@@ -587,6 +730,39 @@ extension RadioPanelView {
                     }
                 }
                 .accessibilityHint("CW break-in mode. Right-click or VO+Shift+M to jump to a value.")
+
+                HStack(spacing: 8) {
+                    PanelToggleButton(label: "AUTO TUNE", isOn: radio.cwAutotuneActive ?? false) {
+                        radio.setCWAutotuneActive(!(radio.cwAutotuneActive ?? false))
+                    }
+                    .accessibilityHint("CW autotune on/off")
+                }
+
+                SliderWithSteppers(
+                    label: "CW Pitch",
+                    value: Binding(
+                        get: { Double(radio.cwPitchHz ?? 700) },
+                        set: { radio.setCWPitchHzDebounced(Int($0)) }
+                    ),
+                    range: 300...1100,
+                    fineStep: 5,
+                    coarseStep: 50,
+                    displayFormat: { "\(Int($0)) Hz" },
+                    accessibilityUnit: "hertz"
+                )
+
+                SliderWithSteppers(
+                    label: "Break-in Delay",
+                    value: Binding(
+                        get: { Double(radio.cwBreakInDelayMs ?? 200) },
+                        set: { radio.setCWBreakInDelayMsDebounced(Int($0)) }
+                    ),
+                    range: 0...1000,
+                    fineStep: 50,
+                    coarseStep: 100,
+                    displayFormat: { "\(Int($0)) ms" },
+                    accessibilityUnit: "milliseconds"
+                )
             }
             .padding(.top, 4)
         }
@@ -623,6 +799,39 @@ extension RadioPanelView {
                         radio.setVOXEnabled(!(radio.voxEnabled ?? false))
                     }
                     .accessibilityHint("VOX (voice-operated transmit) on/off")
+
+                    PanelToggleButton(label: "LOCK", isOn: radio.isLocked ?? false) {
+                        radio.setLocked(!(radio.isLocked ?? false))
+                    }
+                    .accessibilityHint("Radio lock on/off")
+
+                    PanelToggleButton(label: "MUTE", isOn: radio.isMuted ?? false) {
+                        radio.setMuted(!(radio.isMuted ?? false))
+                    }
+                    .accessibilityHint("Audio mute on/off")
+
+                    PanelToggleButton(label: "SPK", isOn: !(radio.isSpeakerMuted ?? false)) {
+                        radio.setSpeakerMuted(!(radio.isSpeakerMuted ?? false))
+                    }
+                    .accessibilityHint("Speaker mute — lit when speaker is active")
+                }
+
+                // TX/RX/DSP Monitor toggles
+                HStack(spacing: 8) {
+                    PanelToggleButton(label: "TX MON", isOn: radio.txMonitorEnabled ?? false) {
+                        radio.setTXMonitorEnabled(!(radio.txMonitorEnabled ?? false))
+                    }
+                    .accessibilityHint("TX monitor on/off")
+
+                    PanelToggleButton(label: "RX MON", isOn: radio.rxMonitorEnabled ?? false) {
+                        radio.setRXMonitorEnabled(!(radio.rxMonitorEnabled ?? false))
+                    }
+                    .accessibilityHint("RX monitor on/off")
+
+                    PanelToggleButton(label: "DSP MON", isOn: radio.dspMonitorEnabled ?? false) {
+                        radio.setDSPMonitorEnabled(!(radio.dspMonitorEnabled ?? false))
+                    }
+                    .accessibilityHint("DSP monitor on/off")
                 }
 
                 SliderWithSteppers(
@@ -686,7 +895,123 @@ extension RadioPanelView {
     }
 }
 
-// MARK: - Section 10: Split Offset
+// MARK: - Section 10: TX Modulation Sources
+
+extension RadioPanelView {
+    var txModulationSection: some View {
+        GroupBox("TX Modulation Sources") {
+            VStack(alignment: .leading, spacing: 10) {
+
+                Text("Controls which audio inputs the radio uses for TX and data auto-keying.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                let frontOptions = [(0, "Off"), (1, "Mic")]
+                let rearOptions  = [(0, "Off"), (1, "ACC 2"), (2, "USB Audio"), (3, "LAN")]
+
+                // PTT / SEND keying row
+                HStack(spacing: 8) {
+                    Text("PTT keying:")
+                        .frame(minWidth: 100, alignment: .leading)
+                        .font(.callout)
+
+                    Text("Front:")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Menu(frontOptions.first(where: { $0.0 == (radio.msPttFront ?? 1) })?.1 ?? "—") {
+                        ForEach(frontOptions, id: \.0) { v, label in
+                            Button(label) {
+                                radio.setTxModulationSource(
+                                    txMeans: 0,
+                                    front: v,
+                                    rear: radio.msPttRear ?? 0
+                                )
+                            }
+                        }
+                    }
+                    .accessibilityLabel("PTT keying front source: \(frontOptions.first(where: { $0.0 == (radio.msPttFront ?? 1) })?.1 ?? "unknown")")
+
+                    Text("Rear:")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Menu(rearOptions.first(where: { $0.0 == (radio.msPttRear ?? 0) })?.1 ?? "—") {
+                        ForEach(rearOptions, id: \.0) { v, label in
+                            Button(label) {
+                                radio.setTxModulationSource(
+                                    txMeans: 0,
+                                    front: radio.msPttFront ?? 1,
+                                    rear: v
+                                )
+                            }
+                        }
+                    }
+                    .accessibilityLabel("PTT keying rear source: \(rearOptions.first(where: { $0.0 == (radio.msPttRear ?? 0) })?.1 ?? "unknown")")
+                }
+
+                // DATA SEND keying row
+                HStack(spacing: 8) {
+                    Text("DATA SEND:")
+                        .frame(minWidth: 100, alignment: .leading)
+                        .font(.callout)
+
+                    Text("Front:")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Menu(frontOptions.first(where: { $0.0 == (radio.msDataFront ?? 0) })?.1 ?? "—") {
+                        ForEach(frontOptions, id: \.0) { v, label in
+                            Button(label) {
+                                radio.setTxModulationSource(
+                                    txMeans: 1,
+                                    front: v,
+                                    rear: radio.msDataRear ?? 2
+                                )
+                            }
+                        }
+                    }
+                    .accessibilityLabel("DATA SEND front source: \(frontOptions.first(where: { $0.0 == (radio.msDataFront ?? 0) })?.1 ?? "unknown")")
+
+                    Text("Rear:")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Menu(rearOptions.first(where: { $0.0 == (radio.msDataRear ?? 2) })?.1 ?? "—") {
+                        ForEach(rearOptions, id: \.0) { v, label in
+                            Button(label) {
+                                radio.setTxModulationSource(
+                                    txMeans: 1,
+                                    front: radio.msDataFront ?? 0,
+                                    rear: v
+                                )
+                            }
+                        }
+                    }
+                    .accessibilityLabel("DATA SEND rear source: \(rearOptions.first(where: { $0.0 == (radio.msDataRear ?? 2) })?.1 ?? "unknown")")
+                }
+
+                Divider()
+
+                // DATA Auto-TX (DV) — which input auto-keys TX in DATA mode
+                HStack(spacing: 8) {
+                    Text("DATA Auto-TX:")
+                        .frame(minWidth: 100, alignment: .leading)
+                        .font(.callout)
+                    Menu(radio.dataVOXMode?.label ?? "—") {
+                        ForEach(KenwoodCAT.DataVOXMode.allCases) { mode in
+                            Button(mode.label) { radio.setDataVOXMode(mode) }
+                        }
+                    }
+                    .accessibilityLabel("DATA auto-TX source: \(radio.dataVOXMode?.label ?? "unknown")")
+                    Text("(auto-keys TX when audio present)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+}
+
+// MARK: - Section 11: Split Offset
+
 
 extension RadioPanelView {
     var splitOffsetSection: some View {
@@ -713,7 +1038,7 @@ extension RadioPanelView {
     }
 }
 
-// MARK: - Section 11: EQ
+// MARK: - Section 12: EQ
 
 extension RadioPanelView {
     var eqSection: some View {
@@ -745,7 +1070,7 @@ extension RadioPanelView {
     }
 }
 
-// MARK: - Section 12: Menu Settings
+// MARK: - Section 13: Menu Settings
 
 extension RadioPanelView {
     var menuSettingsSection: some View {
@@ -788,7 +1113,7 @@ extension RadioPanelView {
     }
 }
 
-// MARK: - Section 13: Memory
+// MARK: - Section 14: Memory
 
 extension RadioPanelView {
     var memorySection: some View {

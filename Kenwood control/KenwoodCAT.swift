@@ -107,6 +107,26 @@ enum KenwoodCAT {
         String(format: "OM0%X;", mode.rawValue)
     }
 
+    // MARK: - TX Modulation Sources (MS)
+    //
+    // MS{P1}{P2}{P3}: Transmission Audio Entry Selection
+    //   P1: TX keying method  — 0=SEND/PTT, 1=DATA SEND (PF key)
+    //   P2: Front source      — 0=Off, 1=Microphone
+    //   P3: Rear source       — 0=Off, 1=ACC 2, 2=USB Audio, 3=LAN
+    //
+    // The radio stores an independent P2/P3 config for each P1 value.
+    // Read by keying method:  MS{P1};  →  answer MS{P1}{P2}{P3};
+    // Note: P2 and P3 cannot both be Off simultaneously.
+
+    /// Read TX audio source config for the given keying method (0=PTT, 1=DATA SEND).
+    static func getTxAudioSource(txMeans: Int) -> String { "MS\(txMeans);" }
+
+    /// Set TX audio source. txMeans: 0=PTT/SEND, 1=DATA SEND.
+    /// front: 0=Off, 1=Mic.  rear: 0=Off, 1=ACC2, 2=USB Audio, 3=LAN.
+    static func setTxAudioSource(txMeans: Int, front: Int, rear: Int) -> String {
+        "MS\(txMeans)\(front)\(rear);"
+    }
+
     // MARK: - FreeDV mode configuration
     //
     // FreeDV HF modes use USB-DATA on the TS-890S (OM0D = USB-DATA, 0xD = 13).

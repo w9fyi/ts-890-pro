@@ -326,6 +326,14 @@ final class RadioState {
     // DATA VOX
     var dataVOXMode: KenwoodCAT.DataVOXMode?
 
+    // TX Modulation Sources (MS)
+    // P1=0: config when TX keyed by PTT/SEND; P1=1: config when keyed by DATA SEND (PF)
+    // P2: front source 0=Off 1=Mic;  P3: rear source 0=Off 1=ACC2 2=USB 3=LAN
+    var msPttFront: Int?    // MS P1=0, P2
+    var msPttRear: Int?     // MS P1=0, P3
+    var msDataFront: Int?   // MS P1=1, P2
+    var msDataRear: Int?    // MS P1=1, P3
+
     // VOX per-input parameters (index: 0=Mic, 1=ACC2, 2=USB, 3=LAN)
     var voxDelay: [Int?]     = [nil, nil, nil, nil]
     var voxGain: [Int?]      = [nil, nil, nil, nil]
@@ -1043,6 +1051,8 @@ final class RadioState {
         send(KenwoodCAT.getNRLevel())
         send(KenwoodCAT.getNR2TimeConstant())
         send(KenwoodCAT.getDataVOX())
+        send(KenwoodCAT.getTxAudioSource(txMeans: 0))  // PTT keying config
+        send(KenwoodCAT.getTxAudioSource(txMeans: 1))  // DATA SEND keying config
         send(KenwoodCAT.getVOXDelay(inputType: 0))
         send(KenwoodCAT.getVOXGain(inputType: 0))
         send(KenwoodCAT.getAntiVOXLevel(inputType: 0))
@@ -2507,6 +2517,16 @@ final class RadioState {
                let mode = KenwoodCAT.DataVOXMode(rawValue: raw) { dataVOXMode = mode }
             return
         }
+        // MS - TX modulation source (answer: MS{P1}{P2}{P3} = 5 chars)
+        if core.hasPrefix("MS"), core.count >= 5 {
+            if let p1 = Int(core.dropFirst(2).prefix(1)),
+               let p2 = Int(core.dropFirst(3).prefix(1)),
+               let p3 = Int(core.dropFirst(4).prefix(1)) {
+                if p1 == 0 { msPttFront = p2; msPttRear = p3 }
+                else if p1 == 1 { msDataFront = p2; msDataRear = p3 }
+            }
+            return
+        }
         if core.hasPrefix("VD"), core.count >= 6 {
             if let inputType = Int(core.dropFirst(2).prefix(1)), (0...3).contains(inputType),
                let v = Int(core.dropFirst(3).prefix(3)) { voxDelay[inputType] = v }
@@ -3219,6 +3239,14 @@ final class RadioState {
     func setDataVOXMode(_ mode: KenwoodCAT.DataVOXMode) {
         dataVOXMode = mode
         send(KenwoodCAT.setDataVOX(mode))
+    }
+
+    // TX Modulation Sources (MS)
+    func setTxModulationSource(txMeans: Int, front: Int, rear: Int) {
+        if txMeans == 0 { msPttFront = front; msPttRear = rear }
+        else            { msDataFront = front; msDataRear = rear }
+        send(KenwoodCAT.setTxAudioSource(txMeans: txMeans, front: front, rear: rear))
+        send(KenwoodCAT.getTxAudioSource(txMeans: txMeans))
     }
 
     // VOX per-input parameters

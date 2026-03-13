@@ -3011,6 +3011,262 @@ final class RadioState {
         setCWBreakInMode((cwBreakInMode ?? .off).next)
     }
 
+    // MARK: - Batch 1 action methods
+
+    // VFO swap / copy
+    func swapVFOs() {
+        send(KenwoodCAT.swapVFOs())
+        // AI4 pushes FA/FB confirmations automatically
+    }
+
+    func copyVFOAtoB() {
+        send(KenwoodCAT.copyVFOAtoB())
+        // AI4 pushes FB confirmation automatically
+    }
+
+    // Lock / Mute
+    func setLocked(_ on: Bool) {
+        isLocked = on
+        send(KenwoodCAT.setLock(on))
+    }
+
+    func setMuted(_ on: Bool) {
+        isMuted = on
+        send(KenwoodCAT.setMute(on))
+    }
+
+    func setSpeakerMuted(_ on: Bool) {
+        isSpeakerMuted = on
+        send(KenwoodCAT.setSpeakerMute(on))
+    }
+
+    // Monitor ON/OFF
+    func setTXMonitorEnabled(_ on: Bool) {
+        txMonitorEnabled = on
+        send(KenwoodCAT.setTXMonitor(on))
+    }
+
+    func setRXMonitorEnabled(_ on: Bool) {
+        rxMonitorEnabled = on
+        send(KenwoodCAT.setRXMonitor(on))
+    }
+
+    func setDSPMonitorEnabled(_ on: Bool) {
+        dspMonitorEnabled = on
+        send(KenwoodCAT.setDSPMonitor(on))
+    }
+
+    // CW extended
+    func setCWAutotuneActive(_ on: Bool) {
+        cwAutotuneActive = on
+        send(KenwoodCAT.setCWAutotune(on))
+    }
+
+    func setCWPitchHz(_ hz: Int) {
+        let clamped = max(300, min(hz, 1100))
+        cwPitchHz = clamped
+        send(KenwoodCAT.setCWPitch(hz: clamped))
+    }
+
+    func setCWPitchHzDebounced(_ hz: Int) {
+        let clamped = max(300, min(hz, 1100))
+        cwPitchHz = clamped
+        debounceCAT(key: "cw_pitch", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setCWPitch(hz: clamped))
+        }
+    }
+
+    func setCWBreakInDelayMs(_ ms: Int) {
+        let clamped = max(0, min(ms, 1000))
+        cwBreakInDelayMs = clamped
+        send(KenwoodCAT.setCWBreakInDelay(ms: clamped))
+    }
+
+    func setCWBreakInDelayMsDebounced(_ ms: Int) {
+        let clamped = max(0, min(ms, 1000))
+        cwBreakInDelayMs = clamped
+        debounceCAT(key: "cw_breakin_delay", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setCWBreakInDelay(ms: clamped))
+        }
+    }
+
+    // NB2 suite
+    func setNoiseBlanker2Enabled(_ on: Bool) {
+        noiseBlanker2Enabled = on
+        send(KenwoodCAT.setNoiseBlanker2(on))
+    }
+
+    func setNoiseBlanker2Type(_ type: KenwoodCAT.NoiseBlanker2Type) {
+        noiseBlanker2Type = type
+        send(KenwoodCAT.setNoiseBlanker2Type(type))
+    }
+
+    func setNoiseBlanker1Level(_ level: Int) {
+        let clamped = max(1, min(level, 20))
+        noiseBlanker1Level = clamped
+        send(KenwoodCAT.setNoiseBlanker1Level(clamped))
+    }
+
+    func setNoiseBlanker1LevelDebounced(_ level: Int) {
+        let clamped = max(1, min(level, 20))
+        noiseBlanker1Level = clamped
+        debounceCAT(key: "nb1_level", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setNoiseBlanker1Level(clamped))
+        }
+    }
+
+    func setNoiseBlanker2Level(_ level: Int) {
+        let clamped = max(1, min(level, 10))
+        noiseBlanker2Level = clamped
+        send(KenwoodCAT.setNoiseBlanker2Level(clamped))
+    }
+
+    func setNoiseBlanker2LevelDebounced(_ level: Int) {
+        let clamped = max(1, min(level, 10))
+        noiseBlanker2Level = clamped
+        debounceCAT(key: "nb2_level", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setNoiseBlanker2Level(clamped))
+        }
+    }
+
+    func setNoiseBlanker2Depth(_ depth: Int) {
+        let clamped = max(1, min(depth, 20))
+        noiseBlanker2Depth = clamped
+        send(KenwoodCAT.setNoiseBlanker2Depth(clamped))
+    }
+
+    func setNoiseBlanker2DepthDebounced(_ depth: Int) {
+        let clamped = max(1, min(depth, 20))
+        noiseBlanker2Depth = clamped
+        debounceCAT(key: "nb2_depth", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setNoiseBlanker2Depth(clamped))
+        }
+    }
+
+    func setNoiseBlanker2Width(_ width: Int) {
+        let clamped = max(1, min(width, 20))
+        noiseBlanker2Width = clamped
+        send(KenwoodCAT.setNoiseBlanker2Width(clamped))
+    }
+
+    func setNoiseBlanker2WidthDebounced(_ width: Int) {
+        let clamped = max(1, min(width, 20))
+        noiseBlanker2Width = clamped
+        debounceCAT(key: "nb2_width", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setNoiseBlanker2Width(clamped))
+        }
+    }
+
+    // Notch extended
+    func setNotchFrequency(_ value: Int) {
+        let clamped = max(0, min(value, 255))
+        notchFrequency = clamped
+        send(KenwoodCAT.setNotchFrequency(clamped))
+    }
+
+    func setNotchFrequencyDebounced(_ value: Int) {
+        let clamped = max(0, min(value, 255))
+        notchFrequency = clamped
+        debounceCAT(key: "notch_freq", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setNotchFrequency(clamped))
+        }
+    }
+
+    func setNotchBandwidth(_ bw: KenwoodCAT.NotchBandwidth) {
+        notchBandwidth = bw
+        send(KenwoodCAT.setNotchBandwidth(bw))
+    }
+
+    // NR level tuning
+    func setNRLevel(_ level: Int) {
+        let clamped = max(1, min(level, 10))
+        nrLevel = clamped
+        send(KenwoodCAT.setNRLevel(clamped))
+    }
+
+    func setNRLevelDebounced(_ level: Int) {
+        let clamped = max(1, min(level, 10))
+        nrLevel = clamped
+        debounceCAT(key: "nr_level", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setNRLevel(clamped))
+        }
+    }
+
+    func setNR2TimeConstant(_ value: Int) {
+        let clamped = max(0, min(value, 9))
+        nr2TimeConstant = clamped
+        send(KenwoodCAT.setNR2TimeConstant(clamped))
+    }
+
+    func setNR2TimeConstantDebounced(_ value: Int) {
+        let clamped = max(0, min(value, 9))
+        nr2TimeConstant = clamped
+        debounceCAT(key: "nr2_tc", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setNR2TimeConstant(clamped))
+        }
+    }
+
+    // DATA VOX
+    func setDataVOXMode(_ mode: KenwoodCAT.DataVOXMode) {
+        dataVOXMode = mode
+        send(KenwoodCAT.setDataVOX(mode))
+    }
+
+    // VOX per-input parameters
+    func setVOXDelay(inputType: Int, value: Int) {
+        let clamped = max(0, min(value, 20))
+        if (0...3).contains(inputType) { voxDelay[inputType] = clamped }
+        send(KenwoodCAT.setVOXDelay(inputType: inputType, value: clamped))
+    }
+
+    func setVOXDelayDebounced(inputType: Int, value: Int) {
+        let clamped = max(0, min(value, 20))
+        if (0...3).contains(inputType) { voxDelay[inputType] = clamped }
+        debounceCAT(key: "vox_delay_\(inputType)", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setVOXDelay(inputType: inputType, value: clamped))
+        }
+    }
+
+    func setVOXGain(inputType: Int, gain: Int) {
+        let clamped = max(0, min(gain, 20))
+        if (0...3).contains(inputType) { voxGain[inputType] = clamped }
+        send(KenwoodCAT.setVOXGain(inputType: inputType, gain: clamped))
+    }
+
+    func setVOXGainDebounced(inputType: Int, gain: Int) {
+        let clamped = max(0, min(gain, 20))
+        if (0...3).contains(inputType) { voxGain[inputType] = clamped }
+        debounceCAT(key: "vox_gain_\(inputType)", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setVOXGain(inputType: inputType, gain: clamped))
+        }
+    }
+
+    func setAntiVOXLevel(inputType: Int, level: Int) {
+        let clamped = max(0, min(level, 20))
+        if (0...3).contains(inputType) { antiVOXLevel[inputType] = clamped }
+        send(KenwoodCAT.setAntiVOXLevel(inputType: inputType, level: clamped))
+    }
+
+    func setAntiVOXLevelDebounced(inputType: Int, level: Int) {
+        let clamped = max(0, min(level, 20))
+        if (0...3).contains(inputType) { antiVOXLevel[inputType] = clamped }
+        debounceCAT(key: "antivox_\(inputType)", delaySeconds: 0.20) { [weak self] in
+            guard let self else { return }
+            self.send(KenwoodCAT.setAntiVOXLevel(inputType: inputType, level: clamped))
+        }
+    }
+
     private var lastCWKeyerSendDate: Date = .distantPast
 
     /// Send text via the radio's built-in CW keyer.

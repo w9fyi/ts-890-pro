@@ -666,4 +666,206 @@ final class RadioStateFrameParserTests: XCTestCase {
         let last = DiagnosticsStore.shared.txLog.last
         XCTAssertEqual(last, "KY DE AI5OS K;")
     }
+
+    // MARK: - Batch 1 Parsers
+
+    func testParseLK_locked() {
+        radio.handleFrame("LK1")
+        XCTAssertEqual(radio.isLocked, true)
+    }
+
+    func testParseLK_unlocked() {
+        radio.handleFrame("LK0")
+        XCTAssertEqual(radio.isLocked, false)
+    }
+
+    func testParseMU_on() {
+        radio.handleFrame("MU1")
+        XCTAssertEqual(radio.isMuted, true)
+    }
+
+    func testParseMU_off() {
+        radio.handleFrame("MU0")
+        XCTAssertEqual(radio.isMuted, false)
+    }
+
+    func testParseQS_on() {
+        radio.handleFrame("QS1")
+        XCTAssertEqual(radio.isSpeakerMuted, true)
+    }
+
+    func testParseQS_off() {
+        radio.handleFrame("QS0")
+        XCTAssertEqual(radio.isSpeakerMuted, false)
+    }
+
+    func testParsePS_on() {
+        radio.handleFrame("PS1")
+        XCTAssertEqual(radio.isPoweredOn, true)
+    }
+
+    func testParsePS_off() {
+        radio.handleFrame("PS0")
+        XCTAssertEqual(radio.isPoweredOn, false)
+    }
+
+    func testParseFV_setsVersion() {
+        radio.handleFrame("FV2.00")
+        XCTAssertEqual(radio.firmwareVersion, "2.00")
+    }
+
+    func testParseMO0_on() {
+        radio.handleFrame("MO01")
+        XCTAssertEqual(radio.txMonitorEnabled, true)
+    }
+
+    func testParseMO0_off() {
+        radio.handleFrame("MO00")
+        XCTAssertEqual(radio.txMonitorEnabled, false)
+    }
+
+    func testParseMO1_on() {
+        radio.handleFrame("MO11")
+        XCTAssertEqual(radio.rxMonitorEnabled, true)
+    }
+
+    func testParseMO2_off() {
+        radio.handleFrame("MO20")
+        XCTAssertEqual(radio.dspMonitorEnabled, false)
+    }
+
+    func testParseCA_active() {
+        radio.handleFrame("CA1")
+        XCTAssertEqual(radio.cwAutotuneActive, true)
+    }
+
+    func testParseCA_inactive() {
+        radio.handleFrame("CA0")
+        XCTAssertEqual(radio.cwAutotuneActive, false)
+    }
+
+    func testParsePT_300Hz() {
+        radio.handleFrame("PT000")
+        XCTAssertEqual(radio.cwPitchHz, 300)
+    }
+
+    func testParsePT_700Hz() {
+        radio.handleFrame("PT080")
+        XCTAssertEqual(radio.cwPitchHz, 700)
+    }
+
+    func testParsePT_1100Hz() {
+        radio.handleFrame("PT160")
+        XCTAssertEqual(radio.cwPitchHz, 1100)
+    }
+
+    func testParseSD_500ms() {
+        radio.handleFrame("SD0500")
+        XCTAssertEqual(radio.cwBreakInDelayMs, 500)
+    }
+
+    func testParseNB2_on() {
+        radio.handleFrame("NB21")
+        XCTAssertEqual(radio.noiseBlanker2Enabled, true)
+    }
+
+    func testParseNB2_off() {
+        radio.handleFrame("NB20")
+        XCTAssertEqual(radio.noiseBlanker2Enabled, false)
+    }
+
+    func testParseNL1_level() {
+        radio.handleFrame("NL1010")
+        XCTAssertEqual(radio.noiseBlanker1Level, 10)
+    }
+
+    func testParseNL2_level() {
+        radio.handleFrame("NL2005")
+        XCTAssertEqual(radio.noiseBlanker2Level, 5)
+    }
+
+    func testParseNBT_typeA() {
+        radio.handleFrame("NBT0")
+        XCTAssertEqual(radio.noiseBlanker2Type, .typeA)
+    }
+
+    func testParseNBT_typeB() {
+        radio.handleFrame("NBT1")
+        XCTAssertEqual(radio.noiseBlanker2Type, .typeB)
+    }
+
+    func testParseNBD_depth() {
+        radio.handleFrame("NBD015")
+        XCTAssertEqual(radio.noiseBlanker2Depth, 15)
+    }
+
+    func testParseNBW_width() {
+        radio.handleFrame("NBW008")
+        XCTAssertEqual(radio.noiseBlanker2Width, 8)
+    }
+
+    func testParseBP_notchFrequency() {
+        radio.handleFrame("BP128")
+        XCTAssertEqual(radio.notchFrequency, 128)
+    }
+
+    func testParseNW_normal() {
+        radio.handleFrame("NW0")
+        XCTAssertEqual(radio.notchBandwidth, .normal)
+    }
+
+    func testParseNW_wide() {
+        radio.handleFrame("NW2")
+        XCTAssertEqual(radio.notchBandwidth, .wide)
+    }
+
+    func testParseRL1_level() {
+        radio.handleFrame("RL107")
+        XCTAssertEqual(radio.nrLevel, 7)
+    }
+
+    func testParseRL2_timeConstant() {
+        radio.handleFrame("RL204")
+        XCTAssertEqual(radio.nr2TimeConstant, 4)
+    }
+
+    func testParseDV_off() {
+        radio.handleFrame("DV0")
+        XCTAssertEqual(radio.dataVOXMode, .off)
+    }
+
+    func testParseDV_usbAudio() {
+        radio.handleFrame("DV2")
+        XCTAssertEqual(radio.dataVOXMode, .usbAudio)
+    }
+
+    func testParseVD_inputType0() {
+        radio.handleFrame("VD0010")
+        XCTAssertEqual(radio.voxDelay[0], 10)
+    }
+
+    func testParseVD_inputType2() {
+        radio.handleFrame("VD2005")
+        XCTAssertEqual(radio.voxDelay[2], 5)
+    }
+
+    func testParseVG0_gain_inputType0() {
+        radio.handleFrame("VG00015")
+        XCTAssertEqual(radio.voxGain[0], 15)
+    }
+
+    func testParseVG0_gain_inputType3() {
+        radio.handleFrame("VG03020")
+        XCTAssertEqual(radio.voxGain[3], 20)
+    }
+
+    func testParseVG1_antiVOX_inputType0() {
+        radio.handleFrame("VG10008")
+        XCTAssertEqual(radio.antiVOXLevel[0], 8)
+    }
+
+    func testParseVG1_antiVOX_inputType1() {
+        radio.handleFrame("VG11012")
+        XCTAssertEqual(radio.antiVOXLevel[1], 12)
+    }
 }

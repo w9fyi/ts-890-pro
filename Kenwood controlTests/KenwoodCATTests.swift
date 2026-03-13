@@ -866,4 +866,152 @@ final class KenwoodCATTests: XCTestCase {
         XCTAssertEqual(KenwoodCAT.setDataMode(enabled: true),  "DA1;")
         XCTAssertEqual(KenwoodCAT.setDataMode(enabled: false), "DA0;")
     }
+
+    // MARK: - Batch 1 New Commands
+
+    // VFO swap / copy
+    func testSwapVFOs() {
+        XCTAssertEqual(KenwoodCAT.swapVFOs(), "EC;")
+    }
+
+    func testCopyVFOAtoB() {
+        XCTAssertEqual(KenwoodCAT.copyVFOAtoB(), "VV;")
+    }
+
+    // Lock / Mute / Power
+    func testGetLock() { XCTAssertEqual(KenwoodCAT.getLock(), "LK;") }
+    func testSetLock_on()  { XCTAssertEqual(KenwoodCAT.setLock(true),  "LK1;") }
+    func testSetLock_off() { XCTAssertEqual(KenwoodCAT.setLock(false), "LK0;") }
+
+    func testGetMute() { XCTAssertEqual(KenwoodCAT.getMute(), "MU;") }
+    func testSetMute_on()  { XCTAssertEqual(KenwoodCAT.setMute(true),  "MU1;") }
+    func testSetMute_off() { XCTAssertEqual(KenwoodCAT.setMute(false), "MU0;") }
+
+    func testGetSpeakerMute() { XCTAssertEqual(KenwoodCAT.getSpeakerMute(), "QS;") }
+    func testSetSpeakerMute_on()  { XCTAssertEqual(KenwoodCAT.setSpeakerMute(true),  "QS1;") }
+    func testSetSpeakerMute_off() { XCTAssertEqual(KenwoodCAT.setSpeakerMute(false), "QS0;") }
+
+    func testGetPower() { XCTAssertEqual(KenwoodCAT.getPower(), "PS;") }
+    func testSetPower_on()  { XCTAssertEqual(KenwoodCAT.setPower(true),  "PS1;") }
+    func testSetPower_off() { XCTAssertEqual(KenwoodCAT.setPower(false), "PS0;") }
+
+    func testGetFirmwareVersion() { XCTAssertEqual(KenwoodCAT.getFirmwareVersion(), "FV;") }
+
+    // Monitors
+    func testGetTXMonitor() { XCTAssertEqual(KenwoodCAT.getTXMonitor(), "MO0;") }
+    func testSetTXMonitor_on()  { XCTAssertEqual(KenwoodCAT.setTXMonitor(true),  "MO01;") }
+    func testSetTXMonitor_off() { XCTAssertEqual(KenwoodCAT.setTXMonitor(false), "MO00;") }
+
+    func testGetRXMonitor() { XCTAssertEqual(KenwoodCAT.getRXMonitor(), "MO1;") }
+    func testSetRXMonitor_on()  { XCTAssertEqual(KenwoodCAT.setRXMonitor(true),  "MO11;") }
+    func testSetRXMonitor_off() { XCTAssertEqual(KenwoodCAT.setRXMonitor(false), "MO10;") }
+
+    func testGetDSPMonitor() { XCTAssertEqual(KenwoodCAT.getDSPMonitor(), "MO2;") }
+    func testSetDSPMonitor_on()  { XCTAssertEqual(KenwoodCAT.setDSPMonitor(true),  "MO21;") }
+    func testSetDSPMonitor_off() { XCTAssertEqual(KenwoodCAT.setDSPMonitor(false), "MO20;") }
+
+    // CW extended
+    func testGetCWAutotune() { XCTAssertEqual(KenwoodCAT.getCWAutotune(), "CA;") }
+    func testSetCWAutotune_on()  { XCTAssertEqual(KenwoodCAT.setCWAutotune(true),  "CA1;") }
+    func testSetCWAutotune_off() { XCTAssertEqual(KenwoodCAT.setCWAutotune(false), "CA0;") }
+
+    func testGetCWPitch() { XCTAssertEqual(KenwoodCAT.getCWPitch(), "PT;") }
+    func testSetCWPitch_300Hz()  { XCTAssertEqual(KenwoodCAT.setCWPitch(hz: 300),  "PT000;") }
+    func testSetCWPitch_700Hz()  { XCTAssertEqual(KenwoodCAT.setCWPitch(hz: 700),  "PT080;") }
+    func testSetCWPitch_1100Hz() { XCTAssertEqual(KenwoodCAT.setCWPitch(hz: 1100), "PT160;") }
+    func testSetCWPitch_clampLow()  { XCTAssertEqual(KenwoodCAT.setCWPitch(hz: 0),    "PT000;") }
+    func testSetCWPitch_clampHigh() { XCTAssertEqual(KenwoodCAT.setCWPitch(hz: 9999), "PT160;") }
+
+    func testGetCWBreakInDelay() { XCTAssertEqual(KenwoodCAT.getCWBreakInDelay(), "SD;") }
+    func testSetCWBreakInDelay_0ms()    { XCTAssertEqual(KenwoodCAT.setCWBreakInDelay(ms: 0),    "SD0000;") }
+    func testSetCWBreakInDelay_500ms()  { XCTAssertEqual(KenwoodCAT.setCWBreakInDelay(ms: 500),  "SD0500;") }
+    func testSetCWBreakInDelay_1000ms() { XCTAssertEqual(KenwoodCAT.setCWBreakInDelay(ms: 1000), "SD1000;") }
+    func testSetCWBreakInDelay_clampHigh() { XCTAssertEqual(KenwoodCAT.setCWBreakInDelay(ms: 9999), "SD1000;") }
+
+    // NB2 suite
+    func testGetNoiseBlanker2() { XCTAssertEqual(KenwoodCAT.getNoiseBlanker2(), "NB2;") }
+    func testSetNoiseBlanker2_on()  { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2(true),  "NB21;") }
+    func testSetNoiseBlanker2_off() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2(false), "NB20;") }
+
+    func testGetNoiseBlanker1Level() { XCTAssertEqual(KenwoodCAT.getNoiseBlanker1Level(), "NL1;") }
+    func testSetNoiseBlanker1Level_typical() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker1Level(10), "NL1010;") }
+    func testSetNoiseBlanker1Level_clampLow()  { XCTAssertEqual(KenwoodCAT.setNoiseBlanker1Level(0),  "NL1001;") }
+    func testSetNoiseBlanker1Level_clampHigh() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker1Level(99), "NL1020;") }
+
+    func testGetNoiseBlanker2Level() { XCTAssertEqual(KenwoodCAT.getNoiseBlanker2Level(), "NL2;") }
+    func testSetNoiseBlanker2Level_typical() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2Level(5),  "NL2005;") }
+    func testSetNoiseBlanker2Level_clampHigh() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2Level(99), "NL2010;") }
+
+    func testGetNoiseBlanker2Type() { XCTAssertEqual(KenwoodCAT.getNoiseBlanker2Type(), "NBT;") }
+    func testSetNoiseBlanker2Type_typeA() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2Type(.typeA), "NBT0;") }
+    func testSetNoiseBlanker2Type_typeB() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2Type(.typeB), "NBT1;") }
+
+    func testGetNoiseBlanker2Depth() { XCTAssertEqual(KenwoodCAT.getNoiseBlanker2Depth(), "NBD;") }
+    func testSetNoiseBlanker2Depth_typical() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2Depth(10), "NBD010;") }
+    func testSetNoiseBlanker2Depth_clampLow()  { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2Depth(0),  "NBD001;") }
+    func testSetNoiseBlanker2Depth_clampHigh() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2Depth(99), "NBD020;") }
+
+    func testGetNoiseBlanker2Width() { XCTAssertEqual(KenwoodCAT.getNoiseBlanker2Width(), "NBW;") }
+    func testSetNoiseBlanker2Width_typical() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2Width(5), "NBW005;") }
+    func testSetNoiseBlanker2Width_clampHigh() { XCTAssertEqual(KenwoodCAT.setNoiseBlanker2Width(99), "NBW020;") }
+
+    // Notch extended
+    func testGetNotchFrequency() { XCTAssertEqual(KenwoodCAT.getNotchFrequency(), "BP;") }
+    func testSetNotchFrequency_typical() { XCTAssertEqual(KenwoodCAT.setNotchFrequency(128), "BP128;") }
+    func testSetNotchFrequency_min()     { XCTAssertEqual(KenwoodCAT.setNotchFrequency(0),   "BP000;") }
+    func testSetNotchFrequency_max()     { XCTAssertEqual(KenwoodCAT.setNotchFrequency(255), "BP255;") }
+    func testSetNotchFrequency_clampHigh() { XCTAssertEqual(KenwoodCAT.setNotchFrequency(999), "BP255;") }
+
+    func testGetNotchBandwidth() { XCTAssertEqual(KenwoodCAT.getNotchBandwidth(), "NW;") }
+    func testSetNotchBandwidth_normal() { XCTAssertEqual(KenwoodCAT.setNotchBandwidth(.normal), "NW0;") }
+    func testSetNotchBandwidth_mid()    { XCTAssertEqual(KenwoodCAT.setNotchBandwidth(.mid),    "NW1;") }
+    func testSetNotchBandwidth_wide()   { XCTAssertEqual(KenwoodCAT.setNotchBandwidth(.wide),   "NW2;") }
+
+    // NR level tuning
+    func testGetNRLevel() { XCTAssertEqual(KenwoodCAT.getNRLevel(), "RL1;") }
+    func testSetNRLevel_typical() { XCTAssertEqual(KenwoodCAT.setNRLevel(5),  "RL105;") }
+    func testSetNRLevel_min()     { XCTAssertEqual(KenwoodCAT.setNRLevel(1),  "RL101;") }
+    func testSetNRLevel_max()     { XCTAssertEqual(KenwoodCAT.setNRLevel(10), "RL110;") }
+    func testSetNRLevel_clampLow()  { XCTAssertEqual(KenwoodCAT.setNRLevel(0),  "RL101;") }
+    func testSetNRLevel_clampHigh() { XCTAssertEqual(KenwoodCAT.setNRLevel(99), "RL110;") }
+
+    func testGetNR2TimeConstant() { XCTAssertEqual(KenwoodCAT.getNR2TimeConstant(), "RL2;") }
+    func testSetNR2TimeConstant_typical() { XCTAssertEqual(KenwoodCAT.setNR2TimeConstant(5), "RL205;") }
+    func testSetNR2TimeConstant_min()     { XCTAssertEqual(KenwoodCAT.setNR2TimeConstant(0), "RL200;") }
+    func testSetNR2TimeConstant_max()     { XCTAssertEqual(KenwoodCAT.setNR2TimeConstant(9), "RL209;") }
+    func testSetNR2TimeConstant_clampHigh() { XCTAssertEqual(KenwoodCAT.setNR2TimeConstant(99), "RL209;") }
+
+    // DATA VOX
+    func testGetDataVOX() { XCTAssertEqual(KenwoodCAT.getDataVOX(), "DV;") }
+    func testSetDataVOX_off()      { XCTAssertEqual(KenwoodCAT.setDataVOX(.off),      "DV0;") }
+    func testSetDataVOX_acc2()     { XCTAssertEqual(KenwoodCAT.setDataVOX(.acc2),     "DV1;") }
+    func testSetDataVOX_usbAudio() { XCTAssertEqual(KenwoodCAT.setDataVOX(.usbAudio), "DV2;") }
+    func testSetDataVOX_lan()      { XCTAssertEqual(KenwoodCAT.setDataVOX(.lan),      "DV3;") }
+
+    // VOX parameters
+    func testGetVOXDelay_allInputTypes() {
+        XCTAssertEqual(KenwoodCAT.getVOXDelay(inputType: 0), "VD0;")
+        XCTAssertEqual(KenwoodCAT.getVOXDelay(inputType: 1), "VD1;")
+        XCTAssertEqual(KenwoodCAT.getVOXDelay(inputType: 2), "VD2;")
+        XCTAssertEqual(KenwoodCAT.getVOXDelay(inputType: 3), "VD3;")
+    }
+
+    func testSetVOXDelay_typical()    { XCTAssertEqual(KenwoodCAT.setVOXDelay(inputType: 0, value: 10), "VD0010;") }
+    func testSetVOXDelay_clampHigh()  { XCTAssertEqual(KenwoodCAT.setVOXDelay(inputType: 1, value: 99), "VD1020;") }
+
+    func testGetVOXGain_allInputTypes() {
+        XCTAssertEqual(KenwoodCAT.getVOXGain(inputType: 0), "VG00;")
+        XCTAssertEqual(KenwoodCAT.getVOXGain(inputType: 2), "VG02;")
+    }
+
+    func testSetVOXGain_typical()   { XCTAssertEqual(KenwoodCAT.setVOXGain(inputType: 0, gain: 10),  "VG00010;") }
+    func testSetVOXGain_clampHigh() { XCTAssertEqual(KenwoodCAT.setVOXGain(inputType: 3, gain: 99),  "VG03020;") }
+
+    func testGetAntiVOXLevel_allInputTypes() {
+        XCTAssertEqual(KenwoodCAT.getAntiVOXLevel(inputType: 0), "VG10;")
+        XCTAssertEqual(KenwoodCAT.getAntiVOXLevel(inputType: 1), "VG11;")
+    }
+
+    func testSetAntiVOXLevel_typical()   { XCTAssertEqual(KenwoodCAT.setAntiVOXLevel(inputType: 0, level: 5),  "VG10005;") }
+    func testSetAntiVOXLevel_clampHigh() { XCTAssertEqual(KenwoodCAT.setAntiVOXLevel(inputType: 2, level: 99), "VG12020;") }
 }

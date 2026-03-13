@@ -156,11 +156,54 @@ enum KenwoodCAT {
         }
     }
 
+    enum NoiseBlanker2Type: Int, CaseIterable, Identifiable {
+        case typeA = 0, typeB = 1
+        var id: Int { rawValue }
+        var label: String { self == .typeA ? "Type A" : "Type B" }
+    }
+
+    enum NotchBandwidth: Int, CaseIterable, Identifiable {
+        case normal = 0, mid = 1, wide = 2
+        var id: Int { rawValue }
+        var label: String { ["Normal", "Middle", "Wide"][rawValue] }
+    }
+
+    enum DataVOXMode: Int, CaseIterable, Identifiable {
+        case off = 0, acc2 = 1, usbAudio = 2, lan = 3
+        var id: Int { rawValue }
+        var label: String { ["Off", "ACC 2", "USB Audio", "LAN"][rawValue] }
+    }
+
     static func getNoiseReduction() -> String { "NR;" }
     static func setNoiseReduction(_ mode: NoiseReductionMode) -> String { "NR\(mode.rawValue);" }
 
     static func getNotch() -> String { "NT;" }
     static func setNotch(enabled: Bool) -> String { "NT\(enabled ? 1 : 0);" }
+
+    // MARK: - Notch Extended (BP / NW)
+
+    static func getNotchFrequency() -> String { "BP;" }
+    static func setNotchFrequency(_ value: Int) -> String {
+        let clamped = max(0, min(value, 255))
+        return String(format: "BP%03d;", clamped)
+    }
+
+    static func getNotchBandwidth() -> String { "NW;" }
+    static func setNotchBandwidth(_ bw: NotchBandwidth) -> String { "NW\(bw.rawValue);" }
+
+    // MARK: - Noise Reduction Levels (RL1 / RL2)
+
+    static func getNRLevel() -> String { "RL1;" }
+    static func setNRLevel(_ level: Int) -> String {
+        let clamped = max(1, min(level, 10))
+        return String(format: "RL1%02d;", clamped)
+    }
+
+    static func getNR2TimeConstant() -> String { "RL2;" }
+    static func setNR2TimeConstant(_ value: Int) -> String {
+        let clamped = max(0, min(value, 9))
+        return String(format: "RL2%02d;", clamped)
+    }
 
     // MARK: - Squelch / Meter
 
@@ -209,6 +252,27 @@ enum KenwoodCAT {
 
     static func getTransmitterVFO() -> String { "FT;" }
     static func setTransmitterVFO(_ vfo: VFO) -> String { "FT\(vfo.rawValue);" }
+
+    // MARK: - VFO Swap / Copy
+
+    static func swapVFOs() -> String { "EC;" }
+    static func copyVFOAtoB() -> String { "VV;" }
+
+    // MARK: - Lock / Mute / Power
+
+    static func getLock() -> String { "LK;" }
+    static func setLock(_ on: Bool) -> String { "LK\(on ? 1 : 0);" }
+
+    static func getMute() -> String { "MU;" }
+    static func setMute(_ on: Bool) -> String { "MU\(on ? 1 : 0);" }
+
+    static func getSpeakerMute() -> String { "QS;" }
+    static func setSpeakerMute(_ on: Bool) -> String { "QS\(on ? 1 : 0);" }
+
+    static func getPower() -> String { "PS;" }
+    static func setPower(_ on: Bool) -> String { "PS\(on ? 1 : 0);" }
+
+    static func getFirmwareVersion() -> String { "FV;" }
 
     // MARK: - RIT / XIT
 
@@ -496,6 +560,38 @@ enum KenwoodCAT {
     static func getNoiseBlanker() -> String { "NB1;" }
     static func setNoiseBlanker(enabled: Bool) -> String { "NB1\(enabled ? 1 : 0);" }
 
+    // MARK: - Noise Blanker 2 (NB2 / NBT / NBD / NBW / NL1 / NL2)
+
+    static func getNoiseBlanker2() -> String { "NB2;" }
+    static func setNoiseBlanker2(_ on: Bool) -> String { "NB2\(on ? 1 : 0);" }
+
+    static func getNoiseBlanker1Level() -> String { "NL1;" }
+    static func setNoiseBlanker1Level(_ level: Int) -> String {
+        let clamped = max(1, min(level, 20))
+        return String(format: "NL1%03d;", clamped)
+    }
+
+    static func getNoiseBlanker2Level() -> String { "NL2;" }
+    static func setNoiseBlanker2Level(_ level: Int) -> String {
+        let clamped = max(1, min(level, 10))
+        return String(format: "NL2%03d;", clamped)
+    }
+
+    static func getNoiseBlanker2Type() -> String { "NBT;" }
+    static func setNoiseBlanker2Type(_ type: NoiseBlanker2Type) -> String { "NBT\(type.rawValue);" }
+
+    static func getNoiseBlanker2Depth() -> String { "NBD;" }
+    static func setNoiseBlanker2Depth(_ depth: Int) -> String {
+        let clamped = max(1, min(depth, 20))
+        return String(format: "NBD%03d;", clamped)
+    }
+
+    static func getNoiseBlanker2Width() -> String { "NBW;" }
+    static func setNoiseBlanker2Width(_ width: Int) -> String {
+        let clamped = max(1, min(width, 20))
+        return String(format: "NBW%03d;", clamped)
+    }
+
     // MARK: - Beat Cancel (BC)
 
     enum BeatCancelMode: Int, CaseIterable, Identifiable {
@@ -522,6 +618,32 @@ enum KenwoodCAT {
     static func getVOX() -> String { "VX;" }
     static func setVOX(enabled: Bool) -> String { "VX\(enabled ? 1 : 0);" }
 
+    // MARK: - DATA VOX (DV)
+
+    static func getDataVOX() -> String { "DV;" }
+    static func setDataVOX(_ mode: DataVOXMode) -> String { "DV\(mode.rawValue);" }
+
+    // MARK: - VOX Parameters (VD / VG0 / VG1)
+    // inputType: 0=Mic, 1=ACC2, 2=USB Audio, 3=LAN
+
+    static func getVOXDelay(inputType: Int) -> String { "VD\(inputType);" }
+    static func setVOXDelay(inputType: Int, value: Int) -> String {
+        let clamped = max(0, min(value, 20))
+        return String(format: "VD%d%03d;", inputType, clamped)
+    }
+
+    static func getVOXGain(inputType: Int) -> String { "VG0\(inputType);" }
+    static func setVOXGain(inputType: Int, gain: Int) -> String {
+        let clamped = max(0, min(gain, 20))
+        return String(format: "VG0%d%03d;", inputType, clamped)
+    }
+
+    static func getAntiVOXLevel(inputType: Int) -> String { "VG1\(inputType);" }
+    static func setAntiVOXLevel(inputType: Int, level: Int) -> String {
+        let clamped = max(0, min(level, 20))
+        return String(format: "VG1%d%03d;", inputType, clamped)
+    }
+
     // MARK: - Monitor Level (ML)
     // Format: MLnnn; where 000 = off, 001-100 = level
 
@@ -531,6 +653,17 @@ enum KenwoodCAT {
         let clamped = max(0, min(level, 20))
         return String(format: "ML%03d;", clamped)
     }
+
+    // MARK: - Monitor ON/OFF (MO0 / MO1 / MO2)
+
+    static func getTXMonitor() -> String { "MO0;" }
+    static func setTXMonitor(_ on: Bool) -> String { "MO0\(on ? 1 : 0);" }
+
+    static func getRXMonitor() -> String { "MO1;" }
+    static func setRXMonitor(_ on: Bool) -> String { "MO1\(on ? 1 : 0);" }
+
+    static func getDSPMonitor() -> String { "MO2;" }
+    static func setDSPMonitor(_ on: Bool) -> String { "MO2\(on ? 1 : 0);" }
 
     // MARK: - Speech Processor (PR)
 
@@ -560,6 +693,26 @@ enum KenwoodCAT {
 
     static func getCWBreakIn() -> String { "BI;" }
     static func setCWBreakIn(_ mode: CWBreakInMode) -> String { "BI\(mode.rawValue);" }
+
+    // MARK: - CW Extended (CA / PT / SD)
+
+    static func getCWAutotune() -> String { "CA;" }
+    static func setCWAutotune(_ on: Bool) -> String { "CA\(on ? 1 : 0);" }
+
+    // PT: raw 000–160 = 300–1100 Hz in 5 Hz steps. Formula: Hz = 300 + (raw × 5)
+    static func getCWPitch() -> String { "PT;" }
+    static func setCWPitch(hz: Int) -> String {
+        let clamped = max(300, min(hz, 1100))
+        let raw = (clamped - 300) / 5
+        return String(format: "PT%03d;", raw)
+    }
+
+    // SD: 0–1000 ms (radio auto-rounds to nearest 50 ms step)
+    static func getCWBreakInDelay() -> String { "SD;" }
+    static func setCWBreakInDelay(ms: Int) -> String {
+        let clamped = max(0, min(ms, 1000))
+        return String(format: "SD%04d;", clamped)
+    }
 
     // MARK: - Meters (SM)
     // SM0 = S-meter (0-30), SM1 = COMP (0-30 dB), SM2 = ALC (0-30),

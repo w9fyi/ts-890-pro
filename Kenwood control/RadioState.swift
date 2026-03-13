@@ -287,6 +287,50 @@ final class RadioState {
     var speechProcEnabled: Bool?
     var cwKeySpeedWPM: Int?     // 4-100
     var cwBreakInMode: KenwoodCAT.CWBreakInMode?
+
+    // MARK: - Batch 1 new properties
+
+    // Lock / Mute / Power
+    var isLocked: Bool?
+    var isMuted: Bool?
+    var isSpeakerMuted: Bool?
+    var isPoweredOn: Bool?
+    var firmwareVersion: String?
+
+    // Monitors
+    var txMonitorEnabled: Bool?
+    var rxMonitorEnabled: Bool?
+    var dspMonitorEnabled: Bool?
+
+    // CW extended
+    var cwAutotuneActive: Bool?
+    var cwPitchHz: Int?          // 300–1100 Hz
+    var cwBreakInDelayMs: Int?   // 0–1000 ms
+
+    // NB2 suite
+    var noiseBlanker2Enabled: Bool?
+    var noiseBlanker1Level: Int?
+    var noiseBlanker2Level: Int?
+    var noiseBlanker2Type: KenwoodCAT.NoiseBlanker2Type?
+    var noiseBlanker2Depth: Int?
+    var noiseBlanker2Width: Int?
+
+    // Notch extended
+    var notchFrequency: Int?         // 0–255 raw
+    var notchBandwidth: KenwoodCAT.NotchBandwidth?
+
+    // NR level tuning
+    var nrLevel: Int?                // 1–10
+    var nr2TimeConstant: Int?        // 0–9
+
+    // DATA VOX
+    var dataVOXMode: KenwoodCAT.DataVOXMode?
+
+    // VOX per-input parameters (index: 0=Mic, 1=ACC2, 2=USB, 3=LAN)
+    var voxDelay: [Int?]     = [nil, nil, nil, nil]
+    var voxGain: [Int?]      = [nil, nil, nil, nil]
+    var antiVOXLevel: [Int?] = [nil, nil, nil, nil]
+
     /// Raw SM readings keyed by smIndex (0=S-meter,1=COMP,2=ALC,3=SWR,5=power).
     /// Stored in MeterStore so updates do NOT fire RadioState.objectWillChange,
     /// preventing meter polling from triggering full-tree SwiftUI re-renders.
@@ -817,6 +861,11 @@ final class RadioState {
         connection.send(command)
     }
 
+    /// Replaces the active transport. For unit testing only — does not reconnect or re-wire callbacks.
+    func _setConnectionForTesting(_ transport: any CATTransport) {
+        connection = transport
+    }
+
     func setNoiseReduction(enabled: Bool) {
         guard isNoiseReductionEnabled != enabled else { return }
         isNoiseReductionEnabled = enabled
@@ -972,6 +1021,32 @@ final class RadioState {
         send(KenwoodCAT.getSpeechProc())
         send(KenwoodCAT.getCWSpeed())
         send(KenwoodCAT.getCWBreakIn())
+        // Batch 1: new state queries
+        send(KenwoodCAT.getLock())
+        send(KenwoodCAT.getMute())
+        send(KenwoodCAT.getSpeakerMute())
+        send(KenwoodCAT.getFirmwareVersion())
+        send(KenwoodCAT.getTXMonitor())
+        send(KenwoodCAT.getRXMonitor())
+        send(KenwoodCAT.getDSPMonitor())
+        send(KenwoodCAT.getCWAutotune())
+        send(KenwoodCAT.getCWPitch())
+        send(KenwoodCAT.getCWBreakInDelay())
+        send(KenwoodCAT.getNoiseBlanker2())
+        send(KenwoodCAT.getNoiseBlanker1Level())
+        send(KenwoodCAT.getNoiseBlanker2Level())
+        send(KenwoodCAT.getNoiseBlanker2Type())
+        send(KenwoodCAT.getNoiseBlanker2Depth())
+        send(KenwoodCAT.getNoiseBlanker2Width())
+        send(KenwoodCAT.getNotchFrequency())
+        send(KenwoodCAT.getNotchBandwidth())
+        send(KenwoodCAT.getNRLevel())
+        send(KenwoodCAT.getNR2TimeConstant())
+        send(KenwoodCAT.getDataVOX())
+        send(KenwoodCAT.getVOXDelay(inputType: 0))
+        send(KenwoodCAT.getVOXGain(inputType: 0))
+        send(KenwoodCAT.getAntiVOXLevel(inputType: 0))
+        // PS not queried on connect — radio won't answer when already powered on
         // DA command not sent — no DA command exists in TS-890S PC Command Reference
     }
 
@@ -2316,6 +2391,125 @@ final class RadioState {
             if let raw = Int(p1), let mode = KenwoodCAT.CWBreakInMode(rawValue: raw) {
                 cwBreakInMode = mode
             }
+            return
+        }
+
+        // MARK: Batch 1 parsers — longer prefixes first
+
+        // NB2 (must be before any bare NB check)
+        if core.hasPrefix("NB2"), core.count >= 4 {
+            if let raw = Int(core.dropFirst(3).prefix(1)) { noiseBlanker2Enabled = (raw == 1) }
+            return
+        }
+        // NBT / NBD / NBW
+        if core.hasPrefix("NBT"), core.count >= 4 {
+            if let raw = Int(core.dropFirst(3).prefix(1)),
+               let t = KenwoodCAT.NoiseBlanker2Type(rawValue: raw) { noiseBlanker2Type = t }
+            return
+        }
+        if core.hasPrefix("NBD"), core.count >= 6 {
+            if let v = Int(core.dropFirst(3).prefix(3)) { noiseBlanker2Depth = v }
+            return
+        }
+        if core.hasPrefix("NBW"), core.count >= 6 {
+            if let v = Int(core.dropFirst(3).prefix(3)) { noiseBlanker2Width = v }
+            return
+        }
+        // NL1 / NL2
+        if core.hasPrefix("NL1"), core.count >= 6 {
+            if let v = Int(core.dropFirst(3).prefix(3)) { noiseBlanker1Level = v }
+            return
+        }
+        if core.hasPrefix("NL2"), core.count >= 6 {
+            if let v = Int(core.dropFirst(3).prefix(3)) { noiseBlanker2Level = v }
+            return
+        }
+        // MO0 / MO1 / MO2
+        if core.hasPrefix("MO0"), core.count >= 4 {
+            if let raw = Int(core.dropFirst(3).prefix(1)) { txMonitorEnabled = (raw == 1) }
+            return
+        }
+        if core.hasPrefix("MO1"), core.count >= 4 {
+            if let raw = Int(core.dropFirst(3).prefix(1)) { rxMonitorEnabled = (raw == 1) }
+            return
+        }
+        if core.hasPrefix("MO2"), core.count >= 4 {
+            if let raw = Int(core.dropFirst(3).prefix(1)) { dspMonitorEnabled = (raw == 1) }
+            return
+        }
+        // VG0 / VG1 (per input type)
+        if core.hasPrefix("VG0"), core.count >= 7 {
+            if let inputType = Int(core.dropFirst(3).prefix(1)), (0...3).contains(inputType),
+               let v = Int(core.dropFirst(4).prefix(3)) { voxGain[inputType] = v }
+            return
+        }
+        if core.hasPrefix("VG1"), core.count >= 7 {
+            if let inputType = Int(core.dropFirst(3).prefix(1)), (0...3).contains(inputType),
+               let v = Int(core.dropFirst(4).prefix(3)) { antiVOXLevel[inputType] = v }
+            return
+        }
+        // RL1 / RL2
+        if core.hasPrefix("RL1"), core.count >= 5 {
+            if let v = Int(core.dropFirst(3).prefix(2)) { nrLevel = v }
+            return
+        }
+        if core.hasPrefix("RL2"), core.count >= 5 {
+            if let v = Int(core.dropFirst(3).prefix(2)) { nr2TimeConstant = v }
+            return
+        }
+        // LK / MU / QS / PS / FV
+        if core.hasPrefix("LK"), core.count >= 3 {
+            if let raw = Int(core.dropFirst(2).prefix(1)) { isLocked = (raw == 1) }
+            return
+        }
+        if core.hasPrefix("MU"), core.count >= 3 {
+            if let raw = Int(core.dropFirst(2).prefix(1)) { isMuted = (raw == 1) }
+            return
+        }
+        if core.hasPrefix("QS"), core.count >= 3 {
+            if let raw = Int(core.dropFirst(2).prefix(1)) { isSpeakerMuted = (raw == 1) }
+            return
+        }
+        if core.hasPrefix("PS"), core.count >= 3 {
+            if let raw = Int(core.dropFirst(2).prefix(1)) { isPoweredOn = (raw == 1) }
+            return
+        }
+        if core.hasPrefix("FV"), core.count > 2 {
+            firmwareVersion = String(core.dropFirst(2))
+            return
+        }
+        // CA / PT / SD
+        if core.hasPrefix("CA"), core.count >= 3 {
+            if let raw = Int(core.dropFirst(2).prefix(1)) { cwAutotuneActive = (raw == 1) }
+            return
+        }
+        if core.hasPrefix("PT"), core.count >= 5 {
+            if let raw = Int(core.dropFirst(2).prefix(3)) { cwPitchHz = 300 + raw * 5 }
+            return
+        }
+        if core.hasPrefix("SD"), core.count >= 6 {
+            if let v = Int(core.dropFirst(2).prefix(4)) { cwBreakInDelayMs = v }
+            return
+        }
+        // BP / NW
+        if core.hasPrefix("BP"), core.count >= 5 {
+            if let v = Int(core.dropFirst(2).prefix(3)) { notchFrequency = v }
+            return
+        }
+        if core.hasPrefix("NW"), core.count >= 3 {
+            if let raw = Int(core.dropFirst(2).prefix(1)),
+               let bw = KenwoodCAT.NotchBandwidth(rawValue: raw) { notchBandwidth = bw }
+            return
+        }
+        // DV / VD
+        if core.hasPrefix("DV"), core.count >= 3 {
+            if let raw = Int(core.dropFirst(2).prefix(1)),
+               let mode = KenwoodCAT.DataVOXMode(rawValue: raw) { dataVOXMode = mode }
+            return
+        }
+        if core.hasPrefix("VD"), core.count >= 6 {
+            if let inputType = Int(core.dropFirst(2).prefix(1)), (0...3).contains(inputType),
+               let v = Int(core.dropFirst(3).prefix(3)) { voxDelay[inputType] = v }
             return
         }
 

@@ -710,11 +710,11 @@ final class RadioState {
 
     /// Returns a dedup key for high-frequency frame types, nil for everything else.
     /// FA/FB: VFO frequency pushed by AI4 on every encoder tick.
-    /// SM*:   meter readings (SM0–SM5) polled at ~4 Hz.
+    /// SM:    meter reading polled at ~4 Hz — single command, no type index.
     private static func _dedupKey(_ frame: String) -> String? {
         if frame.hasPrefix("FA") { return "FA" }
         if frame.hasPrefix("FB") { return "FB" }
-        if frame.hasPrefix("SM"), frame.count >= 3 { return String(frame.prefix(3)) }
+        if frame.hasPrefix("SM") { return "SM" }
         return nil
     }
 
@@ -972,7 +972,7 @@ final class RadioState {
         send(KenwoodCAT.getSpeechProc())
         send(KenwoodCAT.getCWSpeed())
         send(KenwoodCAT.getCWBreakIn())
-        send(KenwoodCAT.getDataMode())
+        // DA command not sent — no DA command exists in TS-890S PC Command Reference
     }
 
     func setVFOBFrequencyHz(_ hz: Int) {
@@ -1078,16 +1078,16 @@ final class RadioState {
         send(KenwoodCAT.getMemoryChannelNumber())
     }
 
-    /// Start memory scan (SC1;). Radio advances through memory channels automatically.
+    /// Start memory scan (SC01;). Radio advances through memory channels automatically.
     func startMemoryScan() {
         scanActive = true   // optimistic — corrected by SC response frame
-        send("SC1;")
+        send("SC01;")
     }
 
-    /// Stop any active scan (SC0;).
+    /// Stop any active scan (SC00;).
     func stopScan() {
         scanActive = false
-        send("SC0;")
+        send("SC00;")
     }
 
     func recallMemoryChannel(_ channel: Int) {
@@ -1226,7 +1226,7 @@ final class RadioState {
         switch source {
         case .hardware:
             stopTXPassthrough()
-            send("MS001;")
+            send("MS010;")  // P1=0(PTT), P2=1(Front Mic), P3=0(Rear OFF)
         case .usbPassthrough:
             send("MS002;")
             startTXPassthrough()
@@ -1305,11 +1305,11 @@ final class RadioState {
     }
 
     /// Restores the radio to the mode it was in before configureForDigitalMode() was called.
-    /// Sends the previous OM mode + MS001 (SEND/PTT, Front=Microphone, Rear=OFF).
+    /// Sends the previous OM mode + MS010 (SEND/PTT, Front=Microphone, Rear=OFF).
     func revertFromDigitalMode() {
         let revertMode = previousOperatingModeForDigital ?? .usb
         send(KenwoodCAT.setOperatingMode(revertMode))
-        send("MS001;")  // SEND/PTT (P1=0), Front=Microphone (P2=1), Rear=OFF (P3=0)
+        send("MS010;")  // SEND/PTT (P1=0), Front=Microphone (P2=1), Rear=OFF (P3=0)
         isConfiguredForDigitalMode = false
         previousOperatingModeForDigital = nil
         AppFileLogger.shared.log("CAT: reverted from digital mode to \(revertMode.label)")
@@ -1438,7 +1438,7 @@ final class RadioState {
         // Restore previous radio mode and mic routing.
         let revertMode = previousModeBeforeFreeDV ?? .usb
         send(KenwoodCAT.setOperatingMode(revertMode))
-        send("MS001;") // Front = Microphone
+        send("MS010;") // Front = Microphone (P1=0 PTT, P2=1 Mic, P3=0 Rear OFF)
         previousModeBeforeFreeDV = nil
 
         freedvIsActive        = false
@@ -2163,7 +2163,9 @@ final class RadioState {
         }
 
         if core.hasPrefix("SM"), core.count >= 3 {
-            // Format: SMt nnnn or SMtnnnn (t = type 0/1/2/3/5, nnnn = raw reading)
+            // Format: SMnnnn — 4-digit dot count (0000–0070).
+            // No type selector in TS-890S reference: SM; reads S-meter (RX) or power (TX).
+            // The first digit of the value is treated as typeIdx=0 → sMeterDots.
             let params = core.dropFirst(2)
             let typeStr = String(params.prefix(1))
             if let typeIdx = Int(typeStr) {
@@ -2172,7 +2174,6 @@ final class RadioState {
                 if let v = Int(valueStr) {
                     meterReadings[typeIdx] = Double(v)
                     if typeIdx == 0 {
-                        // Keep legacy sMeterDots (0-30 range direct from radio).
                         sMeterDots = v
                     }
                 }
@@ -2263,8 +2264,9 @@ final class RadioState {
             return
         }
 
-        if core.hasPrefix("NB"), core.count == 3 {
-            let p1 = core.dropFirst(2).prefix(1)
+        if core.hasPrefix("NB1"), core.count == 4 {
+            // NB1P1; — NB1 is the primary noise blanker: P1=0 off, P1=1 on
+            let p1 = core.dropFirst(3).prefix(1)
             if let raw = Int(p1) { noiseBlankerEnabled = (raw == 1) }
             return
         }
@@ -2277,9 +2279,9 @@ final class RadioState {
             return
         }
 
-        if core.hasPrefix("MG"), core.count >= 6 {
-            // MG + P1(always 0) + P2P2P2 (gain 0-100)
-            let gainStr = core.dropFirst(3).prefix(3)
+        if core.hasPrefix("MG"), core.count >= 5 {
+            // MGP1P1P1; — 3-digit gain 000-100
+            let gainStr = core.dropFirst(2).prefix(3)
             if let v = Int(gainStr) { micGain = v }
             return
         }
@@ -2296,8 +2298,9 @@ final class RadioState {
             return
         }
 
-        if core.hasPrefix("PR"), core.count >= 3 {
-            let p1 = core.dropFirst(2).prefix(1)
+        if core.hasPrefix("PR0"), core.count >= 4 {
+            // PR0 = Speech Processor ON/OFF: PR00;=off, PR01;=on
+            let p1 = core.dropFirst(3).prefix(1)
             if let raw = Int(p1) { speechProcEnabled = (raw == 1) }
             return
         }

@@ -93,7 +93,7 @@ final class RadioStateFrameParserTests: XCTestCase {
     }
 
     func testParseGC_fast() {
-        radio.handleFrame("GC1;")
+        radio.handleFrame("GC3;")
         XCTAssertEqual(radio.agcMode, .fast)
     }
 
@@ -103,7 +103,7 @@ final class RadioStateFrameParserTests: XCTestCase {
     }
 
     func testParseGC_slow() {
-        radio.handleFrame("GC3;")
+        radio.handleFrame("GC1;")
         XCTAssertEqual(radio.agcMode, .slow)
     }
 
@@ -134,13 +134,13 @@ final class RadioStateFrameParserTests: XCTestCase {
     // MARK: - Noise Blanker (NB)
 
     func testParseNB_on() {
-        radio.handleFrame("NB1;")
+        radio.handleFrame("NB11;")
         XCTAssertEqual(radio.noiseBlankerEnabled, true)
     }
 
     func testParseNB_off() {
-        radio.handleFrame("NB1;")
-        radio.handleFrame("NB0;")
+        radio.handleFrame("NB11;")
+        radio.handleFrame("NB10;")
         XCTAssertEqual(radio.noiseBlankerEnabled, false)
     }
 
@@ -215,9 +215,9 @@ final class RadioStateFrameParserTests: XCTestCase {
         XCTAssertEqual(radio.beatCancelMode, .bc2)
     }
 
-    func testParseBC_nb1ResponseDoesNotCorruptNB() {
-        radio.handleFrame("NB1;")   // NB on
-        radio.handleFrame("NB10;")  // NB1 state response — must NOT corrupt noiseBlankerEnabled
+    func testParseBC_doesNotCorruptNB() {
+        radio.handleFrame("NB11;")   // NB on
+        radio.handleFrame("BC1;")    // BC response — must NOT corrupt noiseBlankerEnabled
         XCTAssertEqual(radio.noiseBlankerEnabled, true)
     }
 

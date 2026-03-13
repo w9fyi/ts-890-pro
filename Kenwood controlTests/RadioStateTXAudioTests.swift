@@ -12,6 +12,7 @@ final class RadioStateTXAudioTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        UserDefaults.standard.removeObject(forKey: "tx_audio_source")
         radio = RadioState()
         DiagnosticsStore.shared.txLog = []
     }
@@ -61,10 +62,10 @@ final class RadioStateTXAudioTests: XCTestCase {
         XCTAssertEqual(radio.txAudioSource, .hardware)
     }
 
-    func testSetHardware_sendsMS001() {
+    func testSetHardware_sendsMS010() {
         radio.setTXAudioSource(.hardware)
-        XCTAssertTrue(sentCommands.contains("MS001;"),
-                      "Switching to hardware mic must send MS001;, got \(sentCommands)")
+        XCTAssertTrue(sentCommands.contains("MS010;"),
+                      "Switching to hardware mic must send MS010;, got \(sentCommands)")
     }
 
     func testSetHardware_doesNotSendMS002() {
@@ -94,10 +95,10 @@ final class RadioStateTXAudioTests: XCTestCase {
                       "Switching to USB passthrough must send MS002;, got \(sentCommands)")
     }
 
-    func testSetUSBPassthrough_doesNotSendMS001() {
+    func testSetUSBPassthrough_doesNotSendMS010() {
         radio.setTXAudioSource(.usbPassthrough)
-        XCTAssertFalse(sentCommands.contains("MS001;"),
-                       "Switching to USB passthrough must not send MS001;, got \(sentCommands)")
+        XCTAssertFalse(sentCommands.contains("MS010;"),
+                       "Switching to USB passthrough must not send MS010;, got \(sentCommands)")
     }
 
     func testSetUSBPassthrough_MS002SentBeforeAttemptingStart() {
@@ -126,17 +127,17 @@ final class RadioStateTXAudioTests: XCTestCase {
 
         XCTAssertTrue(sentCommands.contains("MS002;"),
                       "MS002; should appear in round-trip command log")
-        XCTAssertTrue(sentCommands.contains("MS001;"),
-                      "MS001; should appear in round-trip command log")
+        XCTAssertTrue(sentCommands.contains("MS010;"),
+                      "MS010; should appear in round-trip command log")
 
-        // MS002 before MS001 — passthrough was activated before revert
+        // MS002 before MS010 — passthrough was activated before revert
         guard let ms002idx = sentCommands.firstIndex(of: "MS002;"),
-              let ms001idx = sentCommands.firstIndex(of: "MS001;") else {
-            XCTFail("Both MS002; and MS001; must be in the command log")
+              let ms010idx = sentCommands.firstIndex(of: "MS010;") else {
+            XCTFail("Both MS002; and MS010; must be in the command log")
             return
         }
-        XCTAssertLessThan(ms002idx, ms001idx,
-                          "MS002; (USB audio on) should appear before MS001; (mic restore)")
+        XCTAssertLessThan(ms002idx, ms010idx,
+                          "MS002; (USB audio on) should appear before MS010; (mic restore)")
     }
 
     // MARK: - stopTXPassthrough idempotency
@@ -181,11 +182,11 @@ final class RadioStateTXAudioTests: XCTestCase {
 
     // MARK: - CAT command constant regression guards
 
-    func testMS001_isCorrectCATCommand() {
+    func testMS010_isCorrectCATCommand() {
         // MS: P1=0 (SEND/PTT), P2=1 (Front=Microphone), P3=0 (Rear=OFF)
         radio.setTXAudioSource(.hardware)
-        XCTAssertTrue(sentCommands.contains("MS001;"),
-                      "Front panel mic command must be MS001; per TS-890S command reference")
+        XCTAssertTrue(sentCommands.contains("MS010;"),
+                      "Front panel mic command must be MS010; per TS-890S command reference")
     }
 
     func testMS002_isCorrectCATCommand() {

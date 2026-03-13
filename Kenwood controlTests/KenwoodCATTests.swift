@@ -94,31 +94,32 @@ final class KenwoodCATTests: XCTestCase {
     }
 
     func testSetAGC_allModes() {
+        // GC values per manual: 0=OFF, 1=SLOW, 2=MID, 3=FAST
         XCTAssertEqual(KenwoodCAT.setAGC(.off),  "GC0;")
-        XCTAssertEqual(KenwoodCAT.setAGC(.fast), "GC1;")
+        XCTAssertEqual(KenwoodCAT.setAGC(.slow), "GC1;")
         XCTAssertEqual(KenwoodCAT.setAGC(.mid),  "GC2;")
-        XCTAssertEqual(KenwoodCAT.setAGC(.slow), "GC3;")
+        XCTAssertEqual(KenwoodCAT.setAGC(.fast), "GC3;")
     }
 
     func testAGCMode_nextCyclesFourValues() {
-        XCTAssertEqual(KenwoodCAT.AGCMode.off.next,  .fast)
-        XCTAssertEqual(KenwoodCAT.AGCMode.fast.next, .mid)
-        XCTAssertEqual(KenwoodCAT.AGCMode.mid.next,  .slow)
-        XCTAssertEqual(KenwoodCAT.AGCMode.slow.next, .off)
+        XCTAssertEqual(KenwoodCAT.AGCMode.off.next,  .slow)
+        XCTAssertEqual(KenwoodCAT.AGCMode.slow.next, .mid)
+        XCTAssertEqual(KenwoodCAT.AGCMode.mid.next,  .fast)
+        XCTAssertEqual(KenwoodCAT.AGCMode.fast.next, .off)
     }
 
     // MARK: - Noise Blanker (NB)
 
     func testGetNoiseBlanker() {
-        XCTAssertEqual(KenwoodCAT.getNoiseBlanker(), "NB;")
+        XCTAssertEqual(KenwoodCAT.getNoiseBlanker(), "NB1;")
     }
 
     func testSetNoiseBlanker_on() {
-        XCTAssertEqual(KenwoodCAT.setNoiseBlanker(enabled: true), "NB1;")
+        XCTAssertEqual(KenwoodCAT.setNoiseBlanker(enabled: true), "NB11;")
     }
 
     func testSetNoiseBlanker_off() {
-        XCTAssertEqual(KenwoodCAT.setNoiseBlanker(enabled: false), "NB0;")
+        XCTAssertEqual(KenwoodCAT.setNoiseBlanker(enabled: false), "NB10;")
     }
 
     // MARK: - Beat Cancel (BC)
@@ -188,7 +189,7 @@ final class KenwoodCATTests: XCTestCase {
     func testSetCWSpeed_typical() {
         XCTAssertEqual(KenwoodCAT.setCWSpeed(25), "KS025;")
         XCTAssertEqual(KenwoodCAT.setCWSpeed(4),  "KS004;")
-        XCTAssertEqual(KenwoodCAT.setCWSpeed(100),"KS100;")
+        XCTAssertEqual(KenwoodCAT.setCWSpeed(60), "KS060;")
     }
 
     func testSetCWSpeed_clampsBelow4() {
@@ -196,8 +197,9 @@ final class KenwoodCATTests: XCTestCase {
         XCTAssertEqual(KenwoodCAT.setCWSpeed(3), "KS004;")
     }
 
-    func testSetCWSpeed_clampsAbove100() {
-        XCTAssertEqual(KenwoodCAT.setCWSpeed(101), "KS100;")
+    func testSetCWSpeed_clampsAbove60() {
+        XCTAssertEqual(KenwoodCAT.setCWSpeed(61),  "KS060;")  // manual max is 60 WPM
+        XCTAssertEqual(KenwoodCAT.setCWSpeed(100), "KS060;")
     }
 
     // MARK: - RIT/XIT Offset
@@ -441,23 +443,23 @@ final class KenwoodCATTests: XCTestCase {
     }
 
     func testGetMeterValue_smeter() {
-        XCTAssertEqual(KenwoodCAT.getMeterValue(.smeter),      "SM0;")
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.smeter),      "SM;")
     }
 
     func testGetMeterValue_compression() {
-        XCTAssertEqual(KenwoodCAT.getMeterValue(.compression), "SM1;")
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.compression), "SM;")
     }
 
     func testGetMeterValue_alc() {
-        XCTAssertEqual(KenwoodCAT.getMeterValue(.alc),         "SM2;")
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.alc),         "SM;")
     }
 
     func testGetMeterValue_swr() {
-        XCTAssertEqual(KenwoodCAT.getMeterValue(.swr),         "SM3;")
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.swr),         "SM;")
     }
 
     func testGetMeterValue_power() {
-        XCTAssertEqual(KenwoodCAT.getMeterValue(.power),       "SM5;")
+        XCTAssertEqual(KenwoodCAT.getMeterValue(.power),       "SM;")
     }
 
     func testGetMeterValue_none_returnsEmpty() {
@@ -631,15 +633,15 @@ final class KenwoodCATTests: XCTestCase {
     // MARK: - Memory Mode (MV)
 
     func testGetMemoryMode() {
-        XCTAssertEqual(KenwoodCAT.getMemoryMode(), "MV;;")
+        XCTAssertEqual(KenwoodCAT.getMemoryMode(), "MV;")
     }
 
     func testSetMemoryMode_enabled() {
-        XCTAssertEqual(KenwoodCAT.setMemoryMode(true),  "MV1;;")
+        XCTAssertEqual(KenwoodCAT.setMemoryMode(true),  "MV1;")
     }
 
     func testSetMemoryMode_disabled() {
-        XCTAssertEqual(KenwoodCAT.setMemoryMode(false), "MV0;;")
+        XCTAssertEqual(KenwoodCAT.setMemoryMode(false), "MV0;")
     }
 
     // MARK: - Memory Channel (MN / MA)
@@ -705,11 +707,11 @@ final class KenwoodCATTests: XCTestCase {
     }
 
     func testGetTXEQPreset_command() {
-        XCTAssertEqual(KenwoodCAT.getTXEQPreset(), "EQT0;")
+        XCTAssertEqual(KenwoodCAT.getTXEQPreset(), "EQT1;")
     }
 
     func testGetRXEQPreset_command() {
-        XCTAssertEqual(KenwoodCAT.getRXEQPreset(), "EQR0;")
+        XCTAssertEqual(KenwoodCAT.getRXEQPreset(), "EQR1;")
     }
 
     func testSetTXEQPreset_command() {
@@ -743,14 +745,14 @@ final class KenwoodCATTests: XCTestCase {
     }
 
     func testSetMicGain_typical() {
-        XCTAssertEqual(KenwoodCAT.setMicGain(50),  "MG0050;")
-        XCTAssertEqual(KenwoodCAT.setMicGain(0),   "MG0000;")
-        XCTAssertEqual(KenwoodCAT.setMicGain(100), "MG0100;")
+        XCTAssertEqual(KenwoodCAT.setMicGain(50),  "MG050;")
+        XCTAssertEqual(KenwoodCAT.setMicGain(0),   "MG000;")
+        XCTAssertEqual(KenwoodCAT.setMicGain(100), "MG100;")
     }
 
     func testSetMicGain_clamping() {
-        XCTAssertEqual(KenwoodCAT.setMicGain(-1),  "MG0000;")
-        XCTAssertEqual(KenwoodCAT.setMicGain(101), "MG0100;")
+        XCTAssertEqual(KenwoodCAT.setMicGain(-1),  "MG000;")
+        XCTAssertEqual(KenwoodCAT.setMicGain(101), "MG100;")
     }
 
     // MARK: - VOX (VX)
@@ -774,28 +776,29 @@ final class KenwoodCATTests: XCTestCase {
     }
 
     func testSetMonitorLevel_typical() {
-        XCTAssertEqual(KenwoodCAT.setMonitorLevel(0),   "ML000;")
-        XCTAssertEqual(KenwoodCAT.setMonitorLevel(50),  "ML050;")
-        XCTAssertEqual(KenwoodCAT.setMonitorLevel(100), "ML100;")
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(0),  "ML000;")
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(10), "ML010;")
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(20), "ML020;")
     }
 
     func testSetMonitorLevel_clamping() {
-        XCTAssertEqual(KenwoodCAT.setMonitorLevel(-1),  "ML000;")
-        XCTAssertEqual(KenwoodCAT.setMonitorLevel(101), "ML100;")
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(-1), "ML000;")
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(21), "ML020;")  // manual max is 20
+        XCTAssertEqual(KenwoodCAT.setMonitorLevel(100), "ML020;")
     }
 
     // MARK: - Speech Processor (PR)
 
     func testGetSpeechProc() {
-        XCTAssertEqual(KenwoodCAT.getSpeechProc(), "PR;")
+        XCTAssertEqual(KenwoodCAT.getSpeechProc(), "PR0;")
     }
 
     func testSetSpeechProc_on() {
-        XCTAssertEqual(KenwoodCAT.setSpeechProc(enabled: true),  "PR1;")
+        XCTAssertEqual(KenwoodCAT.setSpeechProc(enabled: true),  "PR01;")
     }
 
     func testSetSpeechProc_off() {
-        XCTAssertEqual(KenwoodCAT.setSpeechProc(enabled: false), "PR0;")
+        XCTAssertEqual(KenwoodCAT.setSpeechProc(enabled: false), "PR00;")
     }
 
     // MARK: - CW Break-in (BI)
@@ -805,21 +808,19 @@ final class KenwoodCATTests: XCTestCase {
     }
 
     func testSetCWBreakIn_allModes() {
-        XCTAssertEqual(KenwoodCAT.setCWBreakIn(.off),  "BI0;")
-        XCTAssertEqual(KenwoodCAT.setCWBreakIn(.semi), "BI1;")
-        XCTAssertEqual(KenwoodCAT.setCWBreakIn(.full), "BI2;")
+        // BI2 returns ?; on hardware — only 0=OFF and 1=ON are valid (confirmed 2026-03-12).
+        XCTAssertEqual(KenwoodCAT.setCWBreakIn(.off), "BI0;")
+        XCTAssertEqual(KenwoodCAT.setCWBreakIn(.on),  "BI1;")
     }
 
     func testCWBreakInMode_nextCycles() {
-        XCTAssertEqual(KenwoodCAT.CWBreakInMode.off.next,  .semi)
-        XCTAssertEqual(KenwoodCAT.CWBreakInMode.semi.next, .full)
-        XCTAssertEqual(KenwoodCAT.CWBreakInMode.full.next, .off)
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.off.next, .on)
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.on.next,  .off)
     }
 
     func testCWBreakInMode_labels() {
-        XCTAssertEqual(KenwoodCAT.CWBreakInMode.off.label,  "Off")
-        XCTAssertEqual(KenwoodCAT.CWBreakInMode.semi.label, "Semi")
-        XCTAssertEqual(KenwoodCAT.CWBreakInMode.full.label, "Full")
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.off.label, "Off")
+        XCTAssertEqual(KenwoodCAT.CWBreakInMode.on.label,  "On")
     }
 
     // MARK: - CW Speed query
@@ -831,19 +832,19 @@ final class KenwoodCATTests: XCTestCase {
     // MARK: - FreeDV mode configuration
 
     func testConfigureForFreeDVLan() {
-        XCTAssertEqual(KenwoodCAT.configureForFreeDVLan(), ["OM0D;", "MS002;"])
+        XCTAssertEqual(KenwoodCAT.configureForFreeDVLan(), ["OM0D;", "MS003;"])
     }
 
     func testConfigureForFreeDVUsb() {
-        XCTAssertEqual(KenwoodCAT.configureForFreeDVUsb(), ["OM0D;", "MS003;"])
+        XCTAssertEqual(KenwoodCAT.configureForFreeDVUsb(), ["OM0D;", "MS002;"])
     }
 
     func testRevertFromFreeDV_defaultMode() {
-        XCTAssertEqual(KenwoodCAT.revertFromFreeDV(), ["OM02;", "MS001;"])
+        XCTAssertEqual(KenwoodCAT.revertFromFreeDV(), ["OM02;", "MS010;"])
     }
 
     func testRevertFromFreeDV_customPreviousMode() {
-        XCTAssertEqual(KenwoodCAT.revertFromFreeDV(previousMode: "OM03;"), ["OM03;", "MS001;"])
+        XCTAssertEqual(KenwoodCAT.revertFromFreeDV(previousMode: "OM03;"), ["OM03;", "MS010;"])
     }
 
     // MARK: - MD / DA commands

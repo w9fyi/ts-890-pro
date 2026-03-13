@@ -430,8 +430,8 @@ final class RadioStateFreeDVTests: XCTestCase {
         radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
-        XCTAssertTrue(sentCommands.contains("MS001;"),
-                      "Expected MS001; (Front=Microphone) on deactivate, got \(sentCommands)")
+        XCTAssertTrue(sentCommands.contains("MS010;"),
+                      "Expected MS010; (Front=Microphone) on deactivate, got \(sentCommands)")
     }
 
     func testDeactivateFreeDV_restoresPreviousMode_USB() {
@@ -537,11 +537,11 @@ final class RadioStateFreeDVTests: XCTestCase {
                       "LAN audio path must use MS003; (Rear=LAN) per TS-890S command reference")
     }
 
-    func testFreeDVCATCommand_revertMicIsMS001() {
+    func testFreeDVCATCommand_revertMicIsMS010() {
         radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
-        XCTAssertTrue(sentCommands.contains("MS001;"),
-                      "Revert must use MS001; (Front=Microphone)")
+        XCTAssertTrue(sentCommands.contains("MS010;"),
+                      "Revert must use MS010; (Front=Microphone)")
     }
 }

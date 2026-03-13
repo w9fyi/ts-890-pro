@@ -138,21 +138,23 @@ final class NRStateMachineTests: XCTestCase {
 
     // MARK: Software mode cycling
 
-    func testSoftwareCycle_offToANR() {
+    func testSoftwareCycle_offToCascade() {
+        // Button cycle is Off → RNNoise+ANR → Off (two-state); ANR/EMNR accessible from picker only.
         radio.nrButtonMode = .software
         radio.softwareNRState = .off
         radio.cycleNRFrontPanel()
-        XCTAssertEqual(radio.softwareNRState, .anr)
-        XCTAssertEqual(radio.nrButtonLabel, "ANR")
+        XCTAssertEqual(radio.softwareNRState, .cascade)
+        XCTAssertEqual(radio.nrButtonLabel, "RNNoise+ANR")
         XCTAssertTrue(radio.nrButtonIsActive)
     }
 
-    func testSoftwareCycle_ANRToEMNR() {
+    func testSoftwareCycle_cascadeToOff() {
         radio.nrButtonMode = .software
-        radio.softwareNRState = .anr
+        radio.softwareNRState = .cascade
         radio.cycleNRFrontPanel()
-        XCTAssertEqual(radio.softwareNRState, .emnr)
-        XCTAssertEqual(radio.nrButtonLabel, "EMNR")
+        XCTAssertEqual(radio.softwareNRState, .off)
+        XCTAssertEqual(radio.nrButtonLabel, "NR: Off")
+        XCTAssertFalse(radio.nrButtonIsActive)
     }
 
     func testSoftwareCycle_EMNRToOff() {
@@ -188,6 +190,62 @@ final class NRStateMachineTests: XCTestCase {
         XCTAssertFalse(radio.isNoiseReductionEnabled,
                        "Backend switch must not silently enable NR when it was off")
     }
+
+    // MARK: cycleNoiseReductionBackend — cmd-ctrl-R
+
+    func testCycleNRBackend_availableCountAtLeastTwo() {
+        // If count < 2 the menu item is disabled and the shortcut won't fire.
+        XCTAssertGreaterThanOrEqual(radio.availableNoiseReductionBackends.count, 2,
+            "Need at least 2 backends for cmd-ctrl-R to remain enabled at all times")
+    }
+
+    func testCycleNRBackend_fromDefault_advancesToNext() {
+        let first = radio.selectedNoiseReductionBackend
+        radio.cycleNoiseReductionBackend()
+        XCTAssertNotEqual(radio.selectedNoiseReductionBackend, first,
+            "First cycle should move away from the default backend")
+    }
+
+    func testCycleNRBackend_fullCycle_returnsToStart() {
+        let start = radio.selectedNoiseReductionBackend
+        // cycleNoiseReductionBackend excludes Passthrough; use cycleable count, not full available count.
+        let cycleable = radio.availableNoiseReductionBackends.filter { $0 != "Passthrough (disabled)" }
+        for _ in 0..<cycleable.count {
+            radio.cycleNoiseReductionBackend()
+        }
+        XCTAssertEqual(radio.selectedNoiseReductionBackend, start,
+            "After \(cycleable.count) cycles should wrap back to starting backend")
+    }
+
+    func testCycleNRBackend_fromPassthrough_wrapsToFirst() {
+        radio.setNoiseReductionBackend("Passthrough (disabled)")
+        XCTAssertEqual(radio.selectedNoiseReductionBackend, "Passthrough (disabled)")
+        radio.cycleNoiseReductionBackend()
+        let first = radio.availableNoiseReductionBackends.first
+        XCTAssertEqual(radio.selectedNoiseReductionBackend, first,
+            "Cycling from Passthrough must wrap to the first available backend")
+    }
+
+    func testCycleNRBackend_passthroughDoesNotDisableShortcut() {
+        // The menu item uses availableNoiseReductionBackends.count < 2 as its disabled condition.
+        // Cycling to Passthrough must not reduce the count below 2.
+        radio.setNoiseReductionBackend("Passthrough (disabled)")
+        XCTAssertGreaterThanOrEqual(radio.availableNoiseReductionBackends.count, 2,
+            "availableNoiseReductionBackends must stay >= 2 when on Passthrough so cmd-ctrl-R stays enabled")
+    }
+
+    func testCycleNRBackend_allBackendsReachable() {
+        // Passthrough is excluded from the cycle (use picker to set it); verify only cycleable backends are reached.
+        let cycleable = radio.availableNoiseReductionBackends.filter { $0 != "Passthrough (disabled)" }
+        var visited: Set<String> = []
+        visited.insert(radio.selectedNoiseReductionBackend)
+        for _ in 0..<cycleable.count {
+            radio.cycleNoiseReductionBackend()
+            visited.insert(radio.selectedNoiseReductionBackend)
+        }
+        XCTAssertEqual(visited.count, cycleable.count,
+            "Every cycleable backend should be visited exactly once in a full cycle")
+    }
 }
 
 // MARK: - Filter slot restore tests
@@ -204,6 +262,7 @@ final class FilterSlotRestoreTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        UserDefaults.standard.removeObject(forKey: "filterSlotIFShiftHz")
         radio = RadioState()
         DiagnosticsStore.shared.txLog = []
     }
@@ -213,8 +272,6 @@ final class FilterSlotRestoreTests: XCTestCase {
         DiagnosticsStore.shared.txLog = []
         super.tearDown()
     }
-
-    // MARK: Basic slot switching
 
     func testSetFilterSlot_A_sendsFL00() {
         radio.setFilterSlot(.a)

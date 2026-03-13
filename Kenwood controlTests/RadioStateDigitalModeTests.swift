@@ -72,8 +72,8 @@ final class RadioStateDigitalModeTests: XCTestCase {
         DiagnosticsStore.shared.txLog = []
 
         radio.revertFromDigitalMode()
-        XCTAssertTrue(sentCommands.contains("MS001;"),
-                      "Expected MS001; (Front=Microphone) in revert commands, got \(sentCommands)")
+        XCTAssertTrue(sentCommands.contains("MS010;"),
+                      "Expected MS010; (Front=Microphone) in revert commands, got \(sentCommands)")
     }
 
     func testRevert_withNoPreviousMode_defaultsToUSB() {
@@ -157,13 +157,13 @@ final class RadioStateDigitalModeTests: XCTestCase {
                       "USB audio source must be MS002 per TS-890S command reference")
     }
 
-    func testRevertCATCommands_microphoneSourceIsMS001() {
+    func testRevertCATCommands_microphoneSourceIsMS010() {
         // MS: P1=0 (SEND/PTT), P2=1 (Front=Microphone), P3=0 (Rear=OFF)
         radio.configureForDigitalMode()
         DiagnosticsStore.shared.txLog = []
         radio.revertFromDigitalMode()
-        XCTAssertTrue(sentCommands.contains("MS001;"),
-                      "Microphone source must be MS001 per TS-890S command reference")
+        XCTAssertTrue(sentCommands.contains("MS010;"),
+                      "Microphone source must be MS010 per TS-890S command reference")
     }
 }
 

@@ -122,22 +122,21 @@ enum KenwoodCAT {
         ["OM0D;", "MS002;"]
     }
 
-    /// Restore USB (plain) + LAN audio after FreeDV session.
+    /// Restore USB (plain) + front mic after FreeDV session.
     static func revertFromFreeDV(previousMode: String = "OM02;") -> [String] {
-        [previousMode, "MS001;"]
+        [previousMode, "MS010;"]  // MS010 = P1=0(PTT), P2=1(Front Mic), P3=0(Rear OFF)
     }
 
-    // MARK: - Mode / Data Mode (MD)
+    // MARK: - Mode / Data Mode (MD / DA)
     //
-    // TS-890 reports "MDx" in Auto Information. We use this as the primary way to enter/exit "USB-DATA".
-    // Exact mapping is radio-specific; we treat values as opaque and restore what we observed.
+    // NOTE: Neither MD nor DA appear in the TS-890S PC Command Reference Rev.1.
+    // MD is a legacy command from older Kenwood radios (TS-2000 etc.) not supported on TS-890S.
+    // DA is absent from the TS-890S D-section entirely.
+    // These functions are kept for response-parser compatibility only.
+    // Do NOT call these as queries — the radio returns `?;`.
     static func getModeMD() -> String { "MD;" }
     static func setModeMD(_ value: Int) -> String { "MD\(value);" }
 
-    // MARK: - Data Mode (DA)
-    //
-    // The TS-890 command set supports "data mode" selection separate from base mode on many Kenwood rigs.
-    // If the radio rejects these commands, it will respond with `?;` and the app will continue.
     static func getDataMode() -> String { "DA;" }
     static func setDataMode(enabled: Bool) -> String { "DA\(enabled ? 1 : 0);" }
 
@@ -295,11 +294,11 @@ enum KenwoodCAT {
 
     // MARK: - Memory Channels
 
-    static func getMemoryMode() -> String { "MV;;" }
+    static func getMemoryMode() -> String { "MV;" }
 
     static func setMemoryMode(_ enabled: Bool) -> String {
-        // MV expects a trailing ";;" per doc examples.
-        return "MV\(enabled ? 1 : 0);;"
+        // Single semicolon — the `；;` in the PDF reference is a fullwidth+halfwidth artifact.
+        return "MV\(enabled ? 1 : 0);"
     }
 
     static func getMemoryChannelNumber() -> String { "MN;" }
@@ -388,6 +387,8 @@ enum KenwoodCAT {
              "Bass Boost 1", "Bass Boost 2", "Conventional",
              "User 1", "User 2", "User 3"][rawValue]
         }
+        /// RX label differs from TX at preset 5: EQR1 P1=5 = "Flat", EQT1 P1=5 = "Conventional".
+        var rxLabel: String { rawValue == 5 ? "Flat" : label }
         /// Factory presets (0–5) cannot be permanently overwritten on the radio.
         var isFactory: Bool { rawValue < 6 }
     }
@@ -429,9 +430,9 @@ enum KenwoodCAT {
     static func getRXEQ() -> String { "UR;" }
     static func setRXEQ(_ bands: [Int]) -> String { "UR\(encodeBands(bands));" }
 
-    static func getTXEQPreset() -> String { "EQT0;" }
+    static func getTXEQPreset() -> String { "EQT1;" }  // EQT1 = TX effect preset selector (EQT0 = ON/OFF state — different command)
     static func setTXEQPreset(_ preset: EQPreset) -> String { "EQT1\(preset.rawValue);" }
-    static func getRXEQPreset() -> String { "EQR0;" }
+    static func getRXEQPreset() -> String { "EQR1;" }  // EQR1 = RX effect preset selector (EQR0 = ON/OFF state — different command)
     static func setRXEQPreset(_ preset: EQPreset) -> String { "EQR1\(preset.rawValue);" }
 
     // MARK: - AGC (GC)
@@ -485,13 +486,15 @@ enum KenwoodCAT {
         var next: FilterSlot { FilterSlot(rawValue: (rawValue + 1) % 3)! }
     }
 
-    static func getFilterSlot() -> String { "FL0;" }
+    static func getFilterSlot() -> String { "FL00;" }  // FL0P1; required — P1=0 queries slot A state
     static func setFilterSlot(_ slot: FilterSlot) -> String { "FL0\(slot.rawValue);" }
 
-    // MARK: - Noise Blanker (NB)
+    // MARK: - Noise Blanker (NB1 / NB2)
+    // TS-890S has two separate noise blankers. NB1 is the primary blanker.
+    // Reference command names are NB1 and NB2 (not bare NB).
 
-    static func getNoiseBlanker() -> String { "NB;" }
-    static func setNoiseBlanker(enabled: Bool) -> String { "NB\(enabled ? 1 : 0);" }
+    static func getNoiseBlanker() -> String { "NB1;" }
+    static func setNoiseBlanker(enabled: Bool) -> String { "NB1\(enabled ? 1 : 0);" }
 
     // MARK: - Beat Cancel (BC)
 
@@ -511,7 +514,7 @@ enum KenwoodCAT {
     static func getMicGain() -> String { "MG;" }
     static func setMicGain(_ value: Int) -> String {
         let clamped = max(0, min(value, 100))
-        return String(format: "MG0%03d;", clamped)
+        return String(format: "MG%03d;", clamped)  // 3-digit, 000–100 per reference
     }
 
     // MARK: - VOX (VX)
@@ -531,8 +534,8 @@ enum KenwoodCAT {
 
     // MARK: - Speech Processor (PR)
 
-    static func getSpeechProc() -> String { "PR;" }
-    static func setSpeechProc(enabled: Bool) -> String { "PR\(enabled ? 1 : 0);" }
+    static func getSpeechProc() -> String { "PR0;" }  // PR0 = ON/OFF command (bare PR; is invalid)
+    static func setSpeechProc(enabled: Bool) -> String { "PR0\(enabled ? 1 : 0);" }  // PR00=off, PR01=on
 
     // MARK: - CW Key Speed (KS)
     // Format: KSnnn; where nnn = 004-100 WPM
@@ -623,7 +626,7 @@ enum KenwoodCAT {
 
     static func getMeterValue(_ type: MeterType) -> String {
         guard type.smIndex >= 0 else { return "" }
-        return "SM\(type.smIndex);"
+        return "SM;"  // TS-890S: SM has no type selector — reads S-meter (RX) or power meter (TX)
     }
 
     // MARK: - Clock (CK) — verified against PC Command Reference Rev.1

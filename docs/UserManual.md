@@ -20,6 +20,7 @@
 12. [Equalizer](#equalizer)
 13. [FreeDV Digital Voice](#freedv-digital-voice)
 14. [FT8 / WSJT-X Integration](#ft8--wsjt-x-integration)
+    - [Band Picker](#band-picker) · [Auto-Reply](#auto-reply) · [Auto-Sequence](#auto-sequence) · [CQ Mode](#cq-mode) · [QSO Log](#qso-log) · [WSJT-X Setup](#wsjt-x-setup)
 15. [Bandscope and Waterfall](#bandscope-and-waterfall)
 16. [Front Panel View](#front-panel-view)
 17. [Memory Browser](#memory-browser)
@@ -31,6 +32,7 @@
 23. [Logs and Diagnostics](#logs-and-diagnostics)
 24. [VoiceOver and Accessibility](#voiceover-and-accessibility)
 25. [Troubleshooting](#troubleshooting)
+26. [Changelog](#changelog)
 
 ---
 
@@ -379,17 +381,137 @@ When connected via USB serial, FreeDV uses the TS-890S USB Codec:
 
 Navigate here with **Command-5** or select **FT8** in the sidebar.
 
-TS-890 Pro provides one-press setup for FT8 operation on each band:
+TS-890 Pro includes a built-in FT8 and FT4 decoder and transmitter based on the open-source ft8_lib C library. No WSJT-X installation is required for basic FT8 operation. WSJT-X is still supported as an external option (see [WSJT-X Setup](#wsjt-x-setup) below).
 
-- **Band buttons** — jump to the standard FT8 calling frequency for 160m through 10m
-- **WSJT-X Mode** button — switches the radio to USB-DATA (`OM0D;`) and sets TX audio to USB Codec (`MS002;`)
-- **Revert** — returns to the previous mode and Microphone audio source
+### Band Picker
+
+The band picker at the top of the FT8 section lets you select any standard FT8 calling frequency from 160m through 10m. Selecting a band:
+
+- Immediately retunes VFO A to that band's standard FT8 calling frequency
+- Automatically sets the radio to USB mode and data sub-mode if those options are enabled in Settings
+
+This applies whether FT8 is running or stopped, so you can scan bands freely.
+
+### Protocol
+
+Select **FT8** or **FT4** from the protocol picker. FT8 uses 15-second transmit/receive cycles; FT4 uses 7.5-second cycles at slightly higher SNR threshold.
+
+### Starting FT8
+
+1. Select your band from the band picker.
+2. Press **Start FT8 RX** — the app begins capturing LAN audio (requires LAN RX audio running) and decoding each 15-second slot automatically.
+3. Decoded messages appear in the **Decoded Messages** list, sorted newest-first. Messages directed to your callsign are highlighted.
+
+Set your callsign and grid square in **Settings → General** before starting. The decoder needs your callsign to identify messages addressed to you.
+
+### Decoded Messages List
+
+Each row shows:
+
+| Column | Description |
+|---|---|
+| From | Calling station's callsign |
+| To | Addressed-to field (your call, CQ, or another station) |
+| Payload | The message content (grid square, signal report, RR73, etc.) |
+| SNR | Estimated signal-to-noise ratio in dB |
+
+Messages directed to your callsign are shown in a distinct colour. The list holds up to 200 messages per session. Press **Clear** to reset. **Hold Updates** pauses list refreshes (useful while scrolling) without discarding incoming decodes — press again to flush all buffered messages at once.
+
+### Decoder Sensitivity
+
+The built-in decoder is tuned for noisy band conditions:
+
+- Minimum candidate score is set low to catch weak signals
+- Up to 200 sync candidates are evaluated per slot (vs. 140 in default ft8_lib settings)
+- LDPC belief-propagation runs 40 iterations (matching WSJT-X normal depth) for better convergence on borderline signals
+
+On very noisy bands, more decodes may appear with marginal confidence. If you see unusually high false-decode rates, this is normal behaviour for a low-threshold decoder; WSJT-X uses a similar approach.
+
+### Auto-Reply
+
+Enable **Auto-Reply** to have the app automatically respond to stations calling you. The auto-reply state machine follows the standard FT8 QSO exchange:
+
+| Stage | We received | We reply |
+|---|---|---|
+| none → sentGrid | `CQ AI5OS EM10` or `AI5OS <CALL> <GRID>` | `<CALL> AI5OS EM10` |
+| sentGrid → sentRReport | `AI5OS <CALL> <REPORT>` | `<CALL> AI5OS R<REPORT>` |
+| sentRReport → sentRRR | `AI5OS <CALL> RR73` or `R<REPORT>` | `<CALL> AI5OS RR73` |
+| sentRRR → sent73 | `AI5OS <CALL> 73` | `<CALL> AI5OS 73` |
+
+Auto-reply only drives the state machine for the currently **queued target** — the station you have selected to work. This prevents the state machine from advancing prematurely on background decodes.
+
+### CQ Mode
+
+Press **Start CQ** to begin calling CQ automatically on a timed schedule. The **CQ Parity** picker selects whether to transmit on **Even** or **Odd** 15-second slots (the standard for CQ is even slots).
+
+When a station calls you while CQ is running and Auto-Sequence (or Auto-Reply) is enabled, the app:
+
+1. Selects the best incoming caller according to the **Auto-Sequence Priority**
+2. Sets that station as the queued target
+3. Switches from CQ to the directed QSO reply sequence automatically
+
+### Auto-Sequence
+
+**Auto-Sequence** extends Auto-Reply by automatically selecting which incoming caller to work when CQ is running. The **Priority** picker controls selection:
+
+| Priority | Description |
+|---|---|
+| First Decoded | Work the first station decoded calling you this slot |
+| Best SNR | Work the loudest station (highest SNR) |
+| Most Distant | Work the station with the furthest grid square from your grid |
+
+### Queued Target
+
+The **Queued Target** field shows the callsign of the station you are currently working. You can:
+
+- Set it manually by typing a callsign — useful for calling a specific station by hand
+- Let Auto-Sequence set it automatically when CQ is running
+- Clear it with **Clear Target** to abandon a QSO in progress
+
+### TX Text
+
+The **TX Text** field shows the message that will be transmitted next. It is populated automatically by Auto-Reply and Auto-Sequence, or you can type directly. **Planned TX** shows what the state machine intends to send on the next transmit slot.
+
+### Transmitting
+
+- **Arm TX** / **Disarm TX** — enable or disable scheduled transmit. When armed, the app transmits the TX text at the correct slot boundary.
+- **TX Amplitude** — adjusts the output audio level (0.0–1.0, default 0.15). Raise this if the radio's ALC is not moving; lower it if the radio is over-driving.
+
+### Alert Sound
+
+The app plays an alert sound and announces via VoiceOver the first time a station calls you each session. Select the sound from the **Alert Sound** picker (any installed system alert sound). The announcement includes the caller's callsign, grid square (if decoded), and SNR.
+
+### QSO Log
+
+The **QSO Log** tab shows all contacts from the current session:
+
+| Column | Description |
+|---|---|
+| Callsign | Station worked |
+| Date/Time | UTC time of first decode |
+| Freq | Dial frequency in Hz |
+| RST Rcvd | SNR at which we heard them |
+| RST Sent | SNR they reported for our signal |
+| Grid | Their grid square (if decoded) |
+| Confirmed | Checked when 73 or RR73 was exchanged |
+
+### Activity Log
+
+The **Activity Log** tab shows a timestamped record of all FT8 session events: decodes, auto-reply decisions, TX text changes, CQ starts/stops, and QSO confirmations. Enable **Verbose Logging** to also log every decoded line.
+
+### Revert
+
+Press **Stop FT8** then **Revert** to return the radio to the mode, frequency, and audio source it had before FT8 was started.
+
+---
 
 ### WSJT-X Setup
 
+To use WSJT-X as the FT8 engine instead of the built-in decoder:
+
 1. Launch WSJT-X. Set the rig to **Hamlib NET rigctl**, host `localhost`, port `4532`.
 2. Start `rigctld` (part of Hamlib) with the TS-890S serial port or the KNS TCP address.
-3. In TS-890 Pro, press **WSJT-X Mode** to configure the radio.
+3. In TS-890 Pro, select the desired band from the band picker (this tunes the radio and sets USB mode).
 4. WSJT-X handles TX scheduling; TS-890 Pro handles mode/audio routing.
 
 The radio's Enhanced USB port (`cu.SLAB_USBtoUART7`) is recommended for WSJT-X PTT to avoid interfering with the app's CAT stream on the Standard port.
@@ -747,3 +869,48 @@ The following work entirely without visual inspection:
 ### Log file location
 
 `~/Downloads/Kenwood control/kenwood-control.log`
+
+---
+
+## Changelog
+
+### v1.5.0 — 2026-03-14
+
+**FT8 built-in decoder**
+- Built-in FT8/FT4 decoder (ft8_lib C library) — no WSJT-X required for basic FT8 operation
+- Decoder tuned for noisy bands: lower minimum candidate score, 200-candidate evaluation window, 40 LDPC iterations (matching WSJT-X normal depth)
+- Decoded messages list with per-message SNR, directed-to-me highlighting, and VoiceOver announcements
+- Auto-decode captures LAN RX audio and decodes each 15-second slot automatically
+
+**FT8 auto-reply and auto-sequence**
+- Auto-Reply state machine handles the full FT8 QSO exchange (grid → signal report → RR73 → 73) for a queued target
+- Auto-Sequence automatically selects the best incoming caller when CQ is running; priority options: First Decoded, Best SNR, Most Distant
+- CQ mode with even/odd slot parity selection
+- QSO log records callsign, time, dial frequency, RST sent/received, grid square, and confirmation status per contact
+- Activity log with optional verbose mode
+
+**Band picker**
+- Selecting a band now immediately retunes VFO A and enforces USB/data mode — applies whether FT8 is running or stopped
+- Band change is also logged to the app log file for diagnostics
+
+**Infrastructure**
+- `commit-push` script gates commits on passing unit tests
+- Release script (`release-ts890`) runs unit tests before building in full mode
+- 25 new FT8 auto-reply unit tests derived from live on-air QSO sessions (KB9DED, KE9SX, KM4JXE)
+
+---
+
+### v1.3.0 — 2026-03-12
+
+- CAT protocol bug fixes and connection stability improvements
+- Minor UI adjustments to Radio Controls section
+
+---
+
+### v1.2.0 — 2026-03-08
+
+- Initial public release with LAN/KNS and USB serial control
+- LAN RX/TX audio, FreeDV digital voice, WDSP software noise reduction
+- Bandscope and waterfall, EX menu access, KNS administration
+- Memory browser, connection profiles, MIDI tuning
+- VoiceOver-first accessibility throughout

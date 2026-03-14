@@ -30,13 +30,15 @@ echo "    Tests passed."
 
 echo "==> Staging production sources..."
 git add "Kenwood control/"
+git add "Kenwood controlTests/"
+git add "ThirdParty/"
 
 echo "==> Staged files:"
 git status --short | grep "^M"
 
 echo ""
 read -r -p "Proceed with commit? [y/N] " confirm
-[[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
+[[ "$confirm" == "y" || "$confirm" == "Y" ]] || { echo "Aborted."; exit 0; }
 
 git commit -m "$MSG
 

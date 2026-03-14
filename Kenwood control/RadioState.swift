@@ -1515,8 +1515,20 @@ final class RadioState {
         guard !freedvIsActive else { return }
 
         // Save the current mode and TX audio source so we can restore them on deactivate.
-        previousModeBeforeFreeDV = operatingMode
-        previousTxAudioSourceBeforeFreeDV = txAudioSource
+        // Normalize data modes to their voice equivalents — if the radio is already in
+        // USB-DATA (e.g., leftover from WSJT-X), restoring to USB-DATA would leave the
+        // radio in digital mode after FreeDV exits. Map to the base voice mode instead.
+        let modeSnapshot = operatingMode ?? .usb
+        switch modeSnapshot {
+        case .usbData:              previousModeBeforeFreeDV = .usb
+        case .lsbData:              previousModeBeforeFreeDV = .lsb
+        case .fmData:               previousModeBeforeFreeDV = .fm
+        case .amData:               previousModeBeforeFreeDV = .am
+        default:                    previousModeBeforeFreeDV = modeSnapshot
+        }
+        // Always restore to front mic — if txAudioSource is .usbPassthrough (e.g. from
+        // WSJT-X), restoring that on FreeDV exit would leave USB audio active unexpectedly.
+        previousTxAudioSourceBeforeFreeDV = .hardware
 
         // Switch radio to USB-DATA.
         send("OM0D;")

@@ -1034,24 +1034,15 @@ struct FT8SectionView: View {
                     }
                     .frame(minWidth: 100)
                     .accessibilityLabel("FT8 band")
-                    .onChange(of: selectedPresetID) { _, _ in
-                        let hz = selectedFrequencyHz
-                        vm.currentDialHz = hz
-                        radio.send(KenwoodCAT.setVFOAFrequencyHz(hz))
-                        if forceUSB {
-                            radio.send(KenwoodCAT.setOperatingMode(.usb))
-                        }
-                        if forceDataMode {
-                            radio.send(KenwoodCAT.setModeMD(2))
-                        }
-                        AppFileLogger.shared.log("FT8: band change hz=\(hz) preset=\(selectedPresetID)")
-                    }
+                    .accessibilityHint(vm.isFT8Running ? "Stop FT8 to change band" : "Radio retunes when you press Start FT8")
+                    .disabled(vm.isFT8Running)
 
                     if selectedPresetID == "manual" {
                         TextField("MHz", text: $frequencyOverrideMHz)
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 120)
                             .accessibilityLabel("Manual frequency in megahertz")
+                            .disabled(vm.isFT8Running)
                     }
 
                     Divider().frame(height: 20)
@@ -1225,7 +1216,17 @@ struct FT8SectionView: View {
         // we won't try to restore them.
         vm.preFT8FrequencyHz = radio.vfoAFrequencyHz
         vm.currentDialHz = hz
-        vm.preFT8Mode = radio.operatingMode
+        // Normalize data modes to their voice equivalent — if the radio was already in
+        // USB-DATA (leftover from a previous FT8/FreeDV session), restoring to USB-DATA
+        // after Stop would leave the radio in digital mode unintentionally.
+        let rawMode = radio.operatingMode ?? .usb
+        switch rawMode {
+        case .usbData: vm.preFT8Mode = .usb
+        case .lsbData: vm.preFT8Mode = .lsb
+        case .fmData:  vm.preFT8Mode = .fm
+        case .amData:  vm.preFT8Mode = .am
+        default:       vm.preFT8Mode = rawMode
+        }
         vm.preFT8DataModeEnabled = radio.dataModeEnabled
         vm.preFT8MDMode = radio.mdMode
         vm.preFT8Summary = [

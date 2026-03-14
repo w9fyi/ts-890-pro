@@ -23,7 +23,7 @@ final class AccessibilityAuditTests: XCTestCase {
         var issues: [String] = []
         try app.performAccessibilityAudit { issue in
             issues.append("[\(issue.auditType)] \(issue.element?.label ?? "(no label)") — \(issue.compactDescription)")
-            return false  // collect all, don't suppress
+            return true  // suppress so audit continues and we collect all issues
         }
         XCTAssert(issues.isEmpty, "Accessibility issues found:\n" + issues.joined(separator: "\n"))
     }
@@ -33,7 +33,7 @@ final class AccessibilityAuditTests: XCTestCase {
         var issues: [String] = []
         try app.performAccessibilityAudit(for: .sufficientElementDescription) { issue in
             issues.append("[\(issue.auditType)] \(issue.element?.label ?? "(no label)") — \(issue.compactDescription)")
-            return false
+            return true  // suppress so audit continues and we collect all issues
         }
         XCTAssert(issues.isEmpty, "Element description issues found:\n" + issues.joined(separator: "\n"))
     }
@@ -57,7 +57,7 @@ final class AccessibilityAuditTests: XCTestCase {
         var issues: [String] = []
         try app.performAccessibilityAudit { issue in
             issues.append("[\(issue.auditType)] \(issue.element?.label ?? "(no label)") — \(issue.compactDescription)")
-            return false
+            return true  // suppress so audit continues and we collect all issues
         }
         XCTAssert(issues.isEmpty, "Sheet accessibility issues found:\n" + issues.joined(separator: "\n"))
     }
@@ -76,7 +76,7 @@ final class AccessibilityAuditTests: XCTestCase {
         var issues: [String] = []
         try app.performAccessibilityAudit(for: .sufficientElementDescription) { issue in
             issues.append("[\(issue.auditType)] \(issue.element?.label ?? "(no label)") — \(issue.compactDescription)")
-            return false
+            return true  // suppress so audit continues and we collect all issues
         }
         XCTAssert(issues.isEmpty, "Sheet element description issues found:\n" + issues.joined(separator: "\n"))
     }

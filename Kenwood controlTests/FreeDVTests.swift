@@ -546,4 +546,33 @@ final class RadioStateFreeDVTests: XCTestCase {
         XCTAssertTrue(sentCommands.contains("MS010;"),
                       "Revert must use MS010; (Front=Microphone)")
     }
+
+    // MARK: - Mode normalization on activate (regression guards)
+
+    func testDeactivate_whenRadioWasAlreadyInUSBData_restoresToUSB() {
+        // If the radio was in USB-DATA before FreeDV (e.g., leftover from WSJT-X),
+        // deactivation must restore to USB voice mode — not back to USB-DATA.
+        radio.handleFrame("OM0D;")   // radio reports USB-DATA
+        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        DiagnosticsStore.shared.txLog = []
+        radio.deactivateFreeDV()
+        XCTAssertTrue(sentCommands.contains("OM02;"),
+                      "Deactivate when pre-FreeDV mode was USB-DATA must restore OM02; (USB), got \(sentCommands)")
+        XCTAssertFalse(sentCommands.contains("OM0D;"),
+                       "Deactivate must NOT restore OM0D; (USB-DATA), got \(sentCommands)")
+    }
+
+    func testDeactivate_whenTxAudioWasUSBPassthrough_restoresToHardwareMic() {
+        // If txAudioSource was .usbPassthrough before FreeDV (e.g., leftover from WSJT-X),
+        // deactivation must still restore to front mic (MS010;), not USB passthrough (MS002;).
+        radio.setTXAudioSource(.usbPassthrough)
+        DiagnosticsStore.shared.txLog = []
+        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        DiagnosticsStore.shared.txLog = []
+        radio.deactivateFreeDV()
+        XCTAssertTrue(sentCommands.contains("MS010;"),
+                      "Deactivate must restore front mic (MS010;) even if prior source was USB passthrough, got \(sentCommands)")
+        XCTAssertFalse(sentCommands.contains("MS002;"),
+                       "Deactivate must NOT restore MS002; (USB passthrough), got \(sentCommands)")
+    }
 }

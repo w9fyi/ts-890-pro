@@ -829,9 +829,11 @@ private struct VFORow: View {
                     .fill(radio.isTransmitting == true ? Color.red : Color(white: 0.2))
                     .frame(width: 14, height: 14)
                     .accessibilityLabel(radio.isTransmitting == true ? "Transmitting" : "Receiving")
+                    .accessibilityAddTraits([.isImage, .updatesFrequently])
                 Text(radio.isTransmitting == true ? "TX" : "RX")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundColor(radio.isTransmitting == true ? .red : .secondary)
+                    .accessibilityHidden(true)  // label is on the Circle above
             }
         }
         // Cmd+F focuses VFO A — placed here so the shortcut lives with the field
@@ -929,7 +931,9 @@ private struct VFORow: View {
             }
         }
         .controlSize(.small)
-        .accessibilityLabel("Select band for VFO \(vfo)")
+        .accessibilityRepresentation {
+            Button("Select band for VFO \(vfo)") {}
+        }
     }
 }
 
@@ -1689,9 +1693,10 @@ private struct InlineMeterBar: View {
             }
             .frame(height: 8)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(label)
-        .accessibilityValue(String(format: "%.0f%%", value * 100))
+        .accessibilityRepresentation {
+            ProgressView(value: value, total: 1.0)
+                .accessibilityLabel(Text(label))
+        }
     }
 }
 

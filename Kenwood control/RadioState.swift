@@ -2150,7 +2150,9 @@ final class RadioState {
             return
         }
 
-        // SC0 P1 P2; — scan on/off state. P1: 0=stopped, 1=scanning. P2: slow-scan flag.
+        // SC sub-command dispatch — SC0=scan state, SC1=scan speed, SC2=tone scan mode.
+        // SC0 P1 P2; — scan on/off. P1: 0=stopped, 1=scanning. P2: slow-scan flag.
+        //   e.g. SC010; = scanning active, SC000; = stopped.
         if core.hasPrefix("SC0"), core.count >= 4 {
             if let v = Int(core.dropFirst(3).prefix(1)) {
                 scanActive = (v == 1)

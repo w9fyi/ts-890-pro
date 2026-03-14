@@ -12,6 +12,7 @@ final class RadioStateDigitalModeTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
+        UserDefaults.standard.removeObject(forKey: "tx_audio_source")
         radio = RadioState()
         DiagnosticsStore.shared.txLog = []
     }

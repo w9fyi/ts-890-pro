@@ -37,12 +37,13 @@ struct ScopeView: View {
                         }
                     }
 
-                    // Scope controls overlay (top-right)
+                    // Scope controls overlay (top-right) — decorative; span is in canvas accessibilityValue
                     HStack(spacing: 4) {
                         Spacer()
                         scopeControlsBar
                             .padding(4)
                     }
+                    .accessibilityHidden(true)
                 }
                 .frame(height: geo.size.height * 0.30)
                 .background(Color.black)
@@ -63,6 +64,7 @@ struct ScopeView: View {
                     // Center frequency line over waterfall
                     if centerHz != nil {
                         centerMarkerOverlay
+                            .accessibilityHidden(true)
                     }
                 }
                 .frame(height: geo.size.height * 0.70)
@@ -162,7 +164,7 @@ struct ScopeView: View {
         HStack(spacing: 2) {
             Text("Span: \(spanKHz) kHz")
                 .font(.system(size: 10))
-                .foregroundColor(.gray)
+                .foregroundColor(Color(white: 0.75))
                 .padding(.horizontal, 4)
         }
         .background(Color.black.opacity(0.6))

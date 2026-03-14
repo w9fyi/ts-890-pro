@@ -20,12 +20,12 @@ if ! xcodebuild test -scheme "TS-890 Pro" -destination "platform=macOS" \
     -only-testing:"TS-890 ProTests" \
     -project "Kenwood control.xcodeproj" 2>&1 \
     | tee /tmp/ts890-test.log \
-    | grep -E "Test case.*failed|TEST PASSED|TEST FAILED" \
+    | grep -E "Test case.*failed|TEST SUCCEEDED|TEST FAILED" \
     | tail -10; then
     echo "ERROR: Unit tests failed — aborting commit. See /tmp/ts890-test.log"
     exit 1
 fi
-grep -q "TEST PASSED" /tmp/ts890-test.log || { echo "ERROR: Tests did not pass — aborting commit."; exit 1; }
+grep -q "TEST SUCCEEDED" /tmp/ts890-test.log || { echo "ERROR: Tests did not pass — aborting commit."; exit 1; }
 echo "    Tests passed."
 
 echo "==> Staging production sources..."

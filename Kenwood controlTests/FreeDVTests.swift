@@ -295,6 +295,8 @@ final class RadioStateFreeDVTests: XCTestCase {
     override func setUp() {
         super.setUp()
         radio = RadioState()
+        // Reset to a known TX audio state regardless of any persisted UserDefaults value.
+        radio.setTXAudioSource(.hardware)
         DiagnosticsStore.shared.txLog = []
     }
 

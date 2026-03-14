@@ -615,13 +615,13 @@ final class RadioStateFrameParserTests: XCTestCase {
     // MARK: - Scan State (SC)
 
     func testParseSC_scanning() {
-        radio.handleFrame("SC1;")
+        radio.handleFrame("SC010;")  // SC0 P1=1 (scanning) P2=0
         XCTAssertTrue(radio.scanActive)
     }
 
     func testParseSC_stopped() {
-        radio.handleFrame("SC1;")
-        radio.handleFrame("SC0;")
+        radio.handleFrame("SC010;")  // scanning active
+        radio.handleFrame("SC000;")  // SC0 P1=0 (stopped) P2=0
         XCTAssertFalse(radio.scanActive)
     }
 

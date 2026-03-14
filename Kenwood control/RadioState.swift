@@ -136,6 +136,24 @@ final class RadioState {
     var memoryChannelMode: KenwoodCAT.OperatingMode?
     var memoryChannelName: String?
     var scanActive: Bool = false
+    var scanSpeed: Int?
+    var toneScanMode: KenwoodCAT.ToneScanMode?
+    var scanType: KenwoodCAT.ScanType?
+    /// Last ham-band label seen on VFO A — used to detect band changes for auto-mode switching.
+    private var _lastBandLabel: String? = nil
+
+    // Antenna selection (AN)
+    var antennaPort: Int?               // 1=ANT1, 2=ANT2
+    var rxAntennaInUse: Bool?
+    var driveOutEnabled: Bool?
+    var antennaOutputEnabled: Bool?
+
+    // APF Audio Peak Filter (AP0–AP3)
+    var apfEnabled: Bool?
+    var apfShift: Int?                  // 0–80, 40=center
+    var apfBandwidth: KenwoodCAT.APFBandwidth?
+    var apfGain: Int?                   // 0–6
+
     var isNoiseReductionEnabled: Bool = false
     var noiseReductionBackend: String = "Passthrough"
     var availableNoiseReductionBackends: [String] = []
@@ -215,7 +233,9 @@ final class RadioState {
     }
     var lanAudioPacketCount: Int = 0
     var lanAudioLastPacketAt: Date?
-    var autoStartLanAudio: Bool = true
+    var autoStartLanAudio: Bool = true {
+        didSet { UserDefaults.standard.set(autoStartLanAudio, forKey: autoStartLanAudioKey) }
+    }
     var voipOutputLevel: Int?
     var voipInputLevel: Int?
 
@@ -423,6 +443,7 @@ final class RadioState {
     private var freedvLanTxPipeline: FreeDVLanTxPipeline?
     private var freedvUsbPipeline: FreeDVUsbPipeline?
     private var previousModeBeforeFreeDV: KenwoodCAT.OperatingMode?
+    private var previousTxAudioSourceBeforeFreeDV: TXAudioSource?
 
     private var currentHost: String = ""
     private var currentSerialPort: String = ""
@@ -443,12 +464,14 @@ final class RadioState {
     private let lanMicInputUIDKey    = "lan_mic_input_uid"
     private let audioInputUIDKey     = "audio_input_uid"
     private let txAudioSourceKey     = "tx_audio_source"
+    private let autoStartLanAudioKey = "auto_start_lan_audio"
     private let txMicInputUIDKey     = "tx_mic_input_uid"
     private let txCodecOutputUIDKey  = "tx_codec_output_uid"
     // Cache the most recently loaded/saved credentials so we don't touch Keychain on every connect.
     // Keyed by "\(accountTypeRaw)|\(host)".
     private var knsCredentialCache: [String: (username: String, password: String)] = [:]
     private var debouncedCAT: [String: DispatchWorkItem] = [:]
+    private var _bandFreqSaveWork: DispatchWorkItem?
 
     init() {
         // Build the list of available NR backends.
@@ -535,6 +558,10 @@ final class RadioState {
         if let rawSource = UserDefaults.standard.string(forKey: txAudioSourceKey),
            let saved = TXAudioSource(rawValue: rawSource) {
             txAudioSource = saved
+        }
+        // Restore LAN audio auto-start preference (default true if never saved).
+        if UserDefaults.standard.object(forKey: autoStartLanAudioKey) != nil {
+            autoStartLanAudio = UserDefaults.standard.bool(forKey: autoStartLanAudioKey)
         }
         if let saved = UserDefaults.standard.string(forKey: txMicInputUIDKey), !saved.isEmpty,
            audioInputDevices.contains(where: { $0.uid == saved }) {
@@ -1056,6 +1083,12 @@ final class RadioState {
         send(KenwoodCAT.getVOXDelay(inputType: 0))
         send(KenwoodCAT.getVOXGain(inputType: 0))
         send(KenwoodCAT.getAntiVOXLevel(inputType: 0))
+        // Antenna selection, scan state.
+        send(KenwoodCAT.getAntenna())
+        send(KenwoodCAT.getScanState())
+        send(KenwoodCAT.getScanSpeed())
+        send(KenwoodCAT.getToneScanMode())
+        send(KenwoodCAT.getScanType())
         // PS not queried on connect — radio won't answer when already powered on
         // DA command not sent — no DA command exists in TS-890S PC Command Reference
     }
@@ -1165,14 +1198,86 @@ final class RadioState {
 
     /// Start memory scan (SC01;). Radio advances through memory channels automatically.
     func startMemoryScan() {
-        scanActive = true   // optimistic — corrected by SC response frame
-        send("SC01;")
+        scanActive = true   // optimistic — corrected by SC0 response frame
+        send(KenwoodCAT.setScanEnabled(true))
     }
 
     /// Stop any active scan (SC00;).
     func stopScan() {
         scanActive = false
-        send("SC00;")
+        send(KenwoodCAT.setScanEnabled(false))
+    }
+
+    func setScanSpeed(_ speed: Int) {
+        let clamped = max(1, min(speed, 9))
+        scanSpeed = clamped
+        send(KenwoodCAT.setScanSpeed(clamped))
+    }
+
+    func setToneScanMode(_ mode: KenwoodCAT.ToneScanMode) {
+        toneScanMode = mode
+        send(KenwoodCAT.setToneScanMode(mode))
+    }
+
+    func setScanType(_ type: KenwoodCAT.ScanType) {
+        scanType = type
+        send(KenwoodCAT.setScanType(type))
+    }
+
+    // Band table used for step up/down. Matches fpBandRanges in FrontPanelView.
+    // UserDefaults keys share the "bandFreq_A_<label>" format used by FrontPanelView.switchBand().
+    private static let _bandStepTable: [(label: String, defaultHz: Int, range: ClosedRange<Int>)] = [
+        ("160m",  1_800_000,  1_800_000...2_000_000),
+        ("80m",   3_500_000,  3_500_000...4_000_000),
+        ("60m",   5_330_500,  5_330_000...5_410_000),
+        ("40m",   7_000_000,  7_000_000...7_300_000),
+        ("30m",  10_100_000, 10_100_000...10_150_000),
+        ("20m",  14_000_000, 14_000_000...14_350_000),
+        ("17m",  18_068_000, 18_068_000...18_168_000),
+        ("15m",  21_000_000, 21_000_000...21_450_000),
+        ("12m",  24_890_000, 24_890_000...24_990_000),
+        ("10m",  28_000_000, 28_000_000...29_700_000),
+        ("6m",   50_000_000, 50_000_000...54_000_000),
+    ]
+
+    func bandStepUp() {
+        guard let hz = vfoAFrequencyHz else { return }
+        let idx  = Self._bandStepTable.firstIndex(where: { $0.range.contains(hz) }) ?? -1
+        let next = min(idx + 1, Self._bandStepTable.count - 1)
+        guard next >= 0 else { return }
+        _applyBandStep(to: Self._bandStepTable[next], currentHz: hz)
+    }
+
+    func bandStepDown() {
+        guard let hz = vfoAFrequencyHz else { return }
+        let idx  = Self._bandStepTable.firstIndex(where: { $0.range.contains(hz) }) ?? Self._bandStepTable.count
+        let prev = max(idx - 1, 0)
+        _applyBandStep(to: Self._bandStepTable[prev], currentHz: hz)
+    }
+
+    private func _applyBandStep(
+        to entry: (label: String, defaultHz: Int, range: ClosedRange<Int>),
+        currentHz: Int
+    ) {
+        if let cur = Self._bandStepTable.first(where: { $0.range.contains(currentHz) }) {
+            UserDefaults.standard.set(currentHz, forKey: "bandFreq_A_\(cur.label)")
+        }
+        let stored = UserDefaults.standard.integer(forKey: "bandFreq_A_\(entry.label)")
+        let target = stored > 0 ? stored : entry.defaultHz
+        send(KenwoodCAT.setVFOAFrequencyHz(target))
+    }
+
+    // Called from the FA frame handler. Debounced so rapid VFO tuning doesn't spam
+    // UserDefaults — only persists after the frequency has been stable for 1 second.
+    private func _scheduleBandFreqSave(hz: Int) {
+        _bandFreqSaveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard self != nil else { return }
+            guard let band = Self._bandRanges.first(where: { $0.1.contains(hz) })?.0 else { return }
+            UserDefaults.standard.set(hz, forKey: "bandFreq_A_\(band)")
+        }
+        _bandFreqSaveWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
 
     func recallMemoryChannel(_ channel: Int) {
@@ -1409,8 +1514,9 @@ final class RadioState {
     func activateFreeDV(mode: FreeDVEngine.Mode, audioPath: FreeDVAudioPath) {
         guard !freedvIsActive else { return }
 
-        // Save the current mode so we can restore it on deactivate.
+        // Save the current mode and TX audio source so we can restore them on deactivate.
         previousModeBeforeFreeDV = operatingMode
+        previousTxAudioSourceBeforeFreeDV = txAudioSource
 
         // Switch radio to USB-DATA.
         send("OM0D;")
@@ -1520,11 +1626,12 @@ final class RadioState {
         freedvUsbPipeline   = nil
         freedvEngine.close()
 
-        // Restore previous radio mode and mic routing.
+        // Restore previous radio mode and TX audio source.
         let revertMode = previousModeBeforeFreeDV ?? .usb
         send(KenwoodCAT.setOperatingMode(revertMode))
-        send("MS010;") // Front = Microphone (P1=0 PTT, P2=1 Mic, P3=0 Rear OFF)
+        setTXAudioSource(previousTxAudioSourceBeforeFreeDV ?? .hardware)
         previousModeBeforeFreeDV = nil
+        previousTxAudioSourceBeforeFreeDV = nil
 
         freedvIsActive        = false
         freedvSync            = false
@@ -1827,7 +1934,11 @@ final class RadioState {
 
         if core.hasPrefix("FA") {
             let digits = core.dropFirst(2).prefix { $0.isNumber }
-            if let hz = Int(digits) { vfoAFrequencyHz = hz }
+            if let hz = Int(digits) {
+                vfoAFrequencyHz = hz
+                autoSwitchModeIfBandChanged(newHz: hz)
+                _scheduleBandFreqSave(hz: hz)
+            }
             return
         }
 
@@ -1852,7 +1963,16 @@ final class RadioState {
             let params = core.dropFirst(2)
             let modeChar = String(params.dropFirst().prefix(1))
             if let raw = Int(modeChar, radix: 16), let mode = KenwoodCAT.OperatingMode(rawValue: raw) {
+                let prev = operatingMode
                 operatingMode = mode
+                // Query APF state when entering CW or CW-R (APF is CW-only hardware).
+                if mode == .cw || mode == .cwR,
+                   prev != .cw && prev != .cwR {
+                    send(KenwoodCAT.getAPFEnabled())
+                    send(KenwoodCAT.getAPFShift())
+                    send(KenwoodCAT.getAPFBandwidth())
+                    send(KenwoodCAT.getAPFGain())
+                }
             }
             return
         }
@@ -2030,11 +2150,88 @@ final class RadioState {
             return
         }
 
-        // SC n; — scan state: 0=stopped, 1=scanning
-        if core.hasPrefix("SC"), core.count >= 3 {
-            if let v = Int(core.dropFirst(2).prefix(1)) {
+        // SC0 P1 P2; — scan on/off state. P1: 0=stopped, 1=scanning. P2: slow-scan flag.
+        if core.hasPrefix("SC0"), core.count >= 4 {
+            if let v = Int(core.dropFirst(3).prefix(1)) {
                 scanActive = (v == 1)
             }
+            return
+        }
+
+        // SC1 P1; — scan speed 1–9.
+        if core.hasPrefix("SC1"), core.count >= 4 {
+            if let v = Int(core.dropFirst(3).prefix(1)) {
+                scanSpeed = v
+            }
+            return
+        }
+
+        // SC2 P1; — tone/CTCSS scan mode. 0=Off, 1=Tone, 2=CTCSS (FM only).
+        if core.hasPrefix("SC2"), core.count >= 4 {
+            if let v = Int(core.dropFirst(3).prefix(1)),
+               let mode = KenwoodCAT.ToneScanMode(rawValue: v) {
+                toneScanMode = mode
+            }
+            return
+        }
+
+        // SC3 P1; — scan type. 0=Program, 1=VFO.
+        if core.hasPrefix("SC3"), core.count >= 4 {
+            if let v = Int(core.dropFirst(3).prefix(1)),
+               let type = KenwoodCAT.ScanType(rawValue: v) {
+                scanType = type
+            }
+            return
+        }
+
+        // AN P1 P2 P3 P4; — antenna selection
+        if core.hasPrefix("AN"), core.count >= 6 {
+            let p = core.dropFirst(2)
+            if let p1 = Int(p.prefix(1)), let p2 = Int(p.dropFirst(1).prefix(1)),
+               let p3 = Int(p.dropFirst(2).prefix(1)), let p4 = Int(p.dropFirst(3).prefix(1)) {
+                antennaPort = p1
+                rxAntennaInUse = (p2 == 1)
+                driveOutEnabled = (p3 == 1)
+                antennaOutputEnabled = (p4 == 1)
+            }
+            return
+        }
+
+        // AP0 P1; — APF on/off. 1=OFF, 2=ON.
+        if core.hasPrefix("AP0"), core.count >= 4 {
+            if let v = Int(core.dropFirst(3).prefix(1)) {
+                apfEnabled = (v == 2)
+            }
+            return
+        }
+
+        // AP1 P1 P1; — APF shift 00–80 (2-digit).
+        if core.hasPrefix("AP1"), core.count >= 5 {
+            if let v = Int(core.dropFirst(3).prefix(2)) {
+                apfShift = v
+            }
+            return
+        }
+
+        // AP2 P1; — APF bandwidth. 0=NAR, 1=MID, 2=WIDE.
+        if core.hasPrefix("AP2"), core.count >= 4 {
+            if let v = Int(core.dropFirst(3).prefix(1)),
+               let bw = KenwoodCAT.APFBandwidth(rawValue: v) {
+                apfBandwidth = bw
+            }
+            return
+        }
+
+        // AP3 P1; — APF gain 0–6.
+        if core.hasPrefix("AP3"), core.count >= 4 {
+            if let v = Int(core.dropFirst(3).prefix(1)) {
+                apfGain = v
+            }
+            return
+        }
+
+        // BD P1 P3; / BU P1 P3; — band change response. State updates arrive via FA/FB.
+        if core.hasPrefix("BD") || core.hasPrefix("BU") {
             return
         }
 
@@ -2568,8 +2765,9 @@ final class RadioState {
 
         if down {
             AppFileLogger.shared.logSync("UI: PTT down")
-            // Ensure VoIP is started before attempting LAN mic streaming.
-            if useKnsLogin {
+            // Only start VoIP stream if LAN audio is enabled — if the user wants hardware audio
+            // only, skip ##VP1 so the radio doesn't stream UDP nobody is listening to.
+            if useKnsLogin && autoStartLanAudio {
                 connection.send("##VP1;")
                 // If we haven't observed the input level yet, assume a sane default so TX isn't silent.
                 if voipInputLevel == nil {
@@ -3394,6 +3592,66 @@ final class RadioState {
         dataModeEnabled = enabled
         send(KenwoodCAT.setDataMode(enabled: enabled))
         send(KenwoodCAT.getDataMode())
+    }
+
+    // MARK: - Antenna / APF / Scan actions
+
+    func cycleAntennaPort() {
+        let next = (antennaPort ?? 1) == 1 ? 2 : 1
+        antennaPort = next
+        // Change port only; use 9 (no-change) for rxAnt, driveOut, antennaOut.
+        send(KenwoodCAT.setAntenna(port: next, rxAnt: 9, driveOut: 9, antennaOut: 9))
+        send(KenwoodCAT.getAntenna())
+    }
+
+    func setAPFEnabled(_ on: Bool) {
+        apfEnabled = on
+        send(KenwoodCAT.setAPFEnabled(on))
+    }
+
+    func setAPFShift(_ value: Int) {
+        let clamped = max(0, min(value, 80))
+        apfShift = clamped
+        send(KenwoodCAT.setAPFShift(clamped))
+    }
+
+    func setAPFBandwidth(_ bw: KenwoodCAT.APFBandwidth) {
+        apfBandwidth = bw
+        send(KenwoodCAT.setAPFBandwidth(bw))
+    }
+
+    func setAPFGain(_ gain: Int) {
+        let clamped = max(0, min(gain, 6))
+        apfGain = clamped
+        send(KenwoodCAT.setAPFGain(clamped))
+    }
+
+    // MARK: - Band-change auto-mode switching (B-012)
+
+    private static let _lsbBands: Set<String> = ["160m", "80m", "60m", "40m"]
+    private static let _bandRanges: [(String, ClosedRange<Int>)] = [
+        ("160m",  1_800_000...2_000_000), ("80m",   3_500_000...4_000_000),
+        ("60m",   5_330_000...5_410_000), ("40m",   7_000_000...7_300_000),
+        ("30m",  10_100_000...10_150_000), ("20m",  14_000_000...14_350_000),
+        ("17m",  18_068_000...18_168_000), ("15m",  21_000_000...21_450_000),
+        ("12m",  24_890_000...24_990_000), ("10m",  28_000_000...29_700_000),
+        ("6m",   50_000_000...54_000_000),
+    ]
+
+    /// Called from the FA frame handler. Auto-switches LSB↔USB when crossing band boundaries.
+    /// Only applies while in an SSB mode; CW/AM/FM/FSK are never touched.
+    private func autoSwitchModeIfBandChanged(newHz: Int) {
+        let newBand = Self._bandRanges.first { $0.1.contains(newHz) }?.0
+        let prevBand = _lastBandLabel
+        _lastBandLabel = newBand
+        // Only switch when both bands are known and different.
+        guard let newBand, let prevBand, newBand != prevBand else { return }
+        // Only auto-switch in SSB modes; do not override CW, AM, FM, FSK, or DATA.
+        guard let mode = operatingMode, mode == .lsb || mode == .usb else { return }
+        let target: KenwoodCAT.OperatingMode = Self._lsbBands.contains(newBand) ? .lsb : .usb
+        guard mode != target else { return }
+        send(KenwoodCAT.setOperatingMode(target))
+        send(KenwoodCAT.getOperatingMode())
     }
 
     // MARK: - EQ commands

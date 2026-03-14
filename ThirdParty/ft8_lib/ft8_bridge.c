@@ -14,9 +14,9 @@
 // ---------------------------------------------------------------------------
 // Decoder configuration
 // ---------------------------------------------------------------------------
-#define FT8B_MIN_SCORE       10
-#define FT8B_MAX_CANDIDATES  140
-#define FT8B_LDPC_ITER       25
+#define FT8B_MIN_SCORE       5    // lowered from 10 — catches weaker candidates on noisy bands
+#define FT8B_MAX_CANDIDATES  200  // raised from 140 — don't discard weak signals on busy bands
+#define FT8B_LDPC_ITER       40   // raised from 25 — matches WSJT-X normal depth, better weak-signal convergence
 #define FT8B_MAX_DECODED     50
 #define FT8B_FREQ_OSR        2
 #define FT8B_TIME_OSR        2

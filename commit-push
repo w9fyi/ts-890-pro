@@ -1,0 +1,58 @@
+#\!/usr/bin/env bash
+# commit-push — stage production sources only and push.
+# Usage: ./commit-push "commit message" [version-tag]
+# Stages all changes under "Kenwood control/" (app source).
+# Intentionally excludes: Kenwood controlTests/, untracked local files.
+set -euo pipefail
+
+MSG="${1:-}"
+TAG="${2:-}"
+
+if [[ -z "$MSG" ]]; then
+    echo "Usage: $0 \"commit message\" [v1.2.0]"
+    exit 1
+fi
+
+cd "$(dirname "$0")"
+
+echo "==> Running unit tests..."
+if ! xcodebuild test -scheme "TS-890 Pro" -destination "platform=macOS" \
+    -only-testing:"TS-890 ProTests" \
+    -project "Kenwood control.xcodeproj" 2>&1 \
+    | tee /tmp/ts890-test.log \
+    | grep -E "Test case.*failed|TEST PASSED|TEST FAILED" \
+    | tail -10; then
+    echo "ERROR: Unit tests failed — aborting commit. See /tmp/ts890-test.log"
+    exit 1
+fi
+grep -q "TEST PASSED" /tmp/ts890-test.log || { echo "ERROR: Tests did not pass — aborting commit."; exit 1; }
+echo "    Tests passed."
+
+echo "==> Staging production sources..."
+git add "Kenwood control/"
+
+echo "==> Staged files:"
+git status --short | grep "^M"
+
+echo ""
+read -r -p "Proceed with commit? [y/N] " confirm
+[[ "${confirm,,}" == "y" ]] || { echo "Aborted."; exit 0; }
+
+git commit -m "$MSG
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+
+if [[ -n "$TAG" ]]; then
+    echo "==> Tagging $TAG..."
+    git tag "$TAG"
+fi
+
+echo "==> Pushing to origin main..."
+git push origin main
+
+if [[ -n "$TAG" ]]; then
+    echo "==> Pushing tag $TAG..."
+    git push origin "$TAG"
+fi
+
+echo "Done."

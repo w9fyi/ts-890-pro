@@ -10,10 +10,14 @@ import SwiftUI
 import Observation
 import Foundation
 import AppKit
+import UniformTypeIdentifiers
 
 @Observable
 final class FT8ViewModel {
-    var isAutoReplyEnabled: Bool = false
+    nonisolated deinit {}
+    var isAutoReplyEnabled: Bool = UserDefaults.standard.bool(forKey: "FT8.AutoReplyEnabled") {
+        didSet { UserDefaults.standard.set(isAutoReplyEnabled, forKey: "FT8.AutoReplyEnabled") }
+    }
     var simulateDecodedText: String = ""
     var decodedMessages: [DecodedMessage] = []
     var holdDecodedListUpdates: Bool = false
@@ -29,7 +33,9 @@ final class FT8ViewModel {
     var cqParityRaw: String = "Even"
     var isTxArmed: Bool = false
     var nextCQTxAt: Date?
-    var isAutoSequenceEnabled: Bool = false
+    var isAutoSequenceEnabled: Bool = UserDefaults.standard.bool(forKey: "FT8.AutoSequenceEnabled") {
+        didSet { UserDefaults.standard.set(isAutoSequenceEnabled, forKey: "FT8.AutoSequenceEnabled") }
+    }
     var autoSequencePriority: AutoSequencePriority = .firstDecoded
     var alertSoundName: String = UserDefaults.standard.string(forKey: "FT8.AlertSoundName") ?? "Radar" {
         didSet { UserDefaults.standard.set(alertSoundName, forKey: "FT8.AlertSoundName") }
@@ -48,6 +54,9 @@ final class FT8ViewModel {
     var isAutoDecodeEnabled: Bool = false
     var selectedProtocol: FT8Protocol = .ft8
     var queuedTarget: String?
+    var sameMessageTxCount: Int = 0
+    var lastTransmittedText: String = ""
+    var cqTickGeneration: Int = 0
     var txAmplitude: Float = 0.15 {
         didSet { UserDefaults.standard.set(txAmplitude, forKey: "FT8.TxAmplitude") }
     }
@@ -70,6 +79,22 @@ final class FT8ViewModel {
     var preFT8Mode: KenwoodCAT.OperatingMode?
     var preFT8DataModeEnabled: Bool?
     var preFT8MDMode: Int?
+
+    // Dial frequency active during this FT8 session — set by startFT8.
+    var currentDialHz: Int = 0
+
+    // QSO log — contacts who called us or were worked this session.
+    struct LoggedQSO: Identifiable {
+        let id: UUID = UUID()
+        let callsign: String
+        let date: Date
+        let dialHz: Int
+        let rstRcvd: String     // SNR we received them at, e.g. "-05"
+        var rstSent: String     // SNR they reported receiving us, e.g. "+00"
+        let theirGrid: String   // their grid square (may be empty)
+        var confirmed: Bool     // true when 73 or RR73 exchanged
+    }
+    var loggedQSOs: [LoggedQSO] = []
 
     // RX buffering at 12 kHz for future decode.
     private let rxQueue = DispatchQueue(label: "FT8.rx")
@@ -154,10 +179,14 @@ final class FT8ViewModel {
             return
         }
 
-        // Drive the QSO state machine if global auto-reply is on,
-        // OR if this message came from our manually-queued target (user explicitly chose to call them).
+        // Only drive the QSO state machine for an already-queued station.
+        // processDecodedLine and fillReply share the same qsoStageByCaller state machine.
+        // If we call autoReply here for a not-yet-queued station, it advances the stage
+        // before fillReply (called from commitAutoSeq → queueTarget) gets to run — causing
+        // fillReply to see a stale stage and fall back to sending our grid instead of
+        // the correct reply (e.g. R-16 when they opened with a signal report).
         let fromQueuedTarget = queuedTarget != nil && parsed?.caller == queuedTarget
-        guard isAutoReplyEnabled || fromQueuedTarget else { return }
+        guard fromQueuedTarget else { return }
 
         if let reply = autoReply(forDecodedLine: normalized, myCall: upperCall, myGrid: upperGrid) {
             plannedTxText = reply
@@ -167,16 +196,52 @@ final class FT8ViewModel {
     }
 
     private func ingestDecodedMessage(_ msg: DecodedMessage) {
-        // Play the user-selected alert sound the first time a station calls us directly.
-        if msg.isDirectedToMe && !alertedCallers.contains(msg.caller) {
-            alertedCallers.insert(msg.caller)
-            (NSSound(named: NSSound.Name(alertSoundName))
-                ?? NSSound(named: NSSound.Name("Radar"))
-                ?? NSSound(named: NSSound.Name("Ping")))?.play()
+        if msg.isDirectedToMe {
+            if !alertedCallers.contains(msg.caller) {
+                // First time this station has called us this session.
+                alertedCallers.insert(msg.caller)
+                let snrStr = formatFT8SNR(msg.snr)
+                let theirGrid = extractGrid(from: msg.payload)
+                loggedQSOs.append(LoggedQSO(
+                    callsign: msg.caller,
+                    date: msg.receivedAt,
+                    dialHz: currentDialHz,
+                    rstRcvd: snrStr,
+                    rstSent: "+00",
+                    theirGrid: theirGrid,
+                    confirmed: false
+                ))
+                let logLine = "Called by: \(msg.caller)"
+                    + (theirGrid.isEmpty ? "" : " (\(theirGrid))")
+                    + " SNR \(snrStr) dB"
+                appendLog(logLine)
+                AccessibilityNotification.Announcement(logLine).post()
+                (NSSound(named: NSSound.Name(alertSoundName))
+                    ?? NSSound(named: NSSound.Name("Radar"))
+                    ?? NSSound(named: NSSound.Name("Ping")))?.play()
+            } else if let idx = loggedQSOs.lastIndex(where: { $0.callsign == msg.caller }) {
+                // Update existing QSO record with RST_SENT or confirmation.
+                let first = msg.payload.split(separator: " ").map(String.init).first ?? ""
+                if first.hasPrefix("R"), isReport(first) {
+                    // e.g. "R-05" — their report of our signal = RST_SENT
+                    loggedQSOs[idx].rstSent = String(first.dropFirst())
+                }
+                if first == "73" || first == "RR73" {
+                    loggedQSOs[idx].confirmed = true
+                    let confirmLine = "QSO confirmed: \(msg.caller)"
+                    appendLog(confirmLine)
+                    AccessibilityNotification.Announcement(confirmLine).post()
+                }
+            }
         }
 
         // Collect autosequence candidates for this decode batch.
-        if isAutoSequenceEnabled && isCQRunning && queuedTarget == nil && msg.isDirectedToMe {
+        // Auto-Reply also needs this so that a queued target gets set when CQ is running —
+        // without queuedTarget set, cqTick will keep sending CQ instead of the planned reply.
+        // RR73, 73, and RRR are closing messages — not new calls. Skip them as candidates.
+        let isClosingPayload = msg.payload == "RR73" || msg.payload == "73" || msg.payload == "RRR"
+        if (isAutoSequenceEnabled || isAutoReplyEnabled) && isCQRunning && queuedTarget == nil && msg.isDirectedToMe && !isClosingPayload {
+            AppFileLogger.shared.log("FT8: directed msg caller=\(msg.caller) adding as candidate snr=\(msg.snr)")
             let distKm: Double? = autoDecodeMyGrid.isEmpty ? nil
                 : FT8ViewModel.gridDistanceKm(from: autoDecodeMyGrid, to: msg.payload)
             autoSeqCandidates.append((msg: msg, snr: msg.snr, distKm: distKm))
@@ -230,6 +295,8 @@ final class FT8ViewModel {
 
     func clearQueuedTarget() {
         queuedTarget = nil
+        sameMessageTxCount = 0
+        lastTransmittedText = ""
         plannedTxText = ""
         txText = ""
         appendLog("Queued target cleared")
@@ -276,7 +343,7 @@ final class FT8ViewModel {
         }
 
         // Fallback: a safe first exchange is sending our grid.
-        let r = "\(call) \(msg.caller) \(grid)"
+        let r = "\(msg.caller) \(call) \(grid)"
         txText = r
         plannedTxText = r
         appendLog("Fill TX (fallback): \(r)")
@@ -290,10 +357,11 @@ final class FT8ViewModel {
             .split(whereSeparator: { $0 == " " || $0 == "\t" })
             .map { String($0) }
 
-        // Expect at least: CALLER MYCALL <X>
+        // FT8 wire format: DESTINATION CALLER PAYLOAD
+        // e.g. "AI5OS KB9DED EN54" → to=AI5OS (us), caller=KB9DED (them)
         guard tokens.count >= 2 else { return nil }
-        let caller = tokens[0]
-        let to = tokens[1]
+        let to = tokens[0]
+        let caller = tokens[1]
         guard to == myCall else { return nil }
 
         let third = tokens.count >= 3 ? tokens[2] : ""
@@ -303,7 +371,7 @@ final class FT8ViewModel {
         // respond with our grid.
         if isGrid(third), stage == .none || stage == .sentGrid {
             qsoStageByCaller[caller] = .sentGrid
-            return "\(myCall) \(caller) \(myGrid)"
+            return "\(caller) \(myCall) \(myGrid)"
         }
 
         // Signal report forms: "-10", "+02", "R-05", "R+00"
@@ -313,28 +381,30 @@ final class FT8ViewModel {
             if third.hasPrefix("R") {
                 if stage != .sentRRR {
                     qsoStageByCaller[caller] = .sentRRR
-                    return "\(myCall) \(caller) RRR"
+                    return "\(caller) \(myCall) RRR"
                 }
                 return nil
             } else {
                 if stage != .sentRReport {
                     qsoStageByCaller[caller] = .sentRReport
-                    return "\(myCall) \(caller) R\(third)"
+                    return "\(caller) \(myCall) R\(third)"
                 }
                 return nil
             }
         }
 
-        if third == "RRR" {
+        if third == "RRR" || third == "RR73" {
             if stage != .sent73 {
                 qsoStageByCaller[caller] = .sent73
-                if queuedTarget == caller { queuedTarget = nil }
-                return "\(myCall) \(caller) 73"
+                // Do NOT clear queuedTarget here — cqTick's closingTxCount will transmit
+                // the 73 reply and then clear the target after it has actually been sent.
+                return "\(caller) \(myCall) 73"
             }
             return nil
         }
 
         if third == "73" {
+            // They sent 73 — QSO complete, no reply needed. Clear the target now.
             qsoStageByCaller[caller] = .sent73
             if queuedTarget == caller { queuedTarget = nil }
             return nil
@@ -342,6 +412,86 @@ final class FT8ViewModel {
 
         // Unknown payload; ignore.
         return nil
+    }
+
+    // MARK: - QSO Log helpers
+
+    private func formatFT8SNR(_ snr: Float) -> String {
+        let i = Int(snr.rounded())
+        return i >= 0 ? String(format: "+%02d", i) : String(format: "%03d", i)
+    }
+
+    private func extractGrid(from payload: String) -> String {
+        let p = payload.uppercased()
+        let chars = Array(p)
+        guard chars.count >= 4,
+              chars[0].isLetter, chars[1].isLetter,
+              chars[2].isNumber, chars[3].isNumber else { return "" }
+        if chars.count >= 6, chars[4].isLetter, chars[5].isLetter {
+            return String(p.prefix(6))
+        }
+        return String(p.prefix(4))
+    }
+
+    func clearLoggedQSOs() {
+        loggedQSOs.removeAll()
+        appendLog("QSO log cleared")
+    }
+
+    /// Generate an ADIF string from the session QSO log.
+    func exportADIF(myCall: String, myGrid: String) -> String {
+        var out = ""
+        out += "Generated by TS-890 Pro\n"
+        out += "<ADIF_VER:5>3.1.4 <PROGRAMID:9>TS890 Pro <EOH>\n\n"
+
+        var utcCal = Calendar(identifier: .gregorian)
+        utcCal.timeZone = TimeZone(identifier: "UTC")!
+
+        func field(_ tag: String, _ value: String) -> String {
+            "<\(tag):\(value.count)>\(value)"
+        }
+
+        for qso in loggedQSOs {
+            let c = utcCal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: qso.date)
+            let dateStr = String(format: "%04d%02d%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
+            let timeStr = String(format: "%02d%02d%02d", c.hour ?? 0, c.minute ?? 0, c.second ?? 0)
+            let freqMHz = String(format: "%.6f", Double(qso.dialHz) / 1_000_000.0)
+            let band    = Self.adifBand(hz: qso.dialHz)
+
+            var parts = [
+                field("CALL",     qso.callsign),
+                field("QSO_DATE", dateStr),
+                field("TIME_ON",  timeStr),
+                field("BAND",     band),
+                field("FREQ",     freqMHz),
+                field("MODE",     "FT8"),
+                field("RST_SENT", qso.rstSent),
+                field("RST_RCVD", qso.rstRcvd),
+                field("OPERATOR", myCall),
+            ]
+            if !qso.theirGrid.isEmpty { parts.append(field("GRIDSQUARE",    qso.theirGrid)) }
+            if !myGrid.isEmpty        { parts.append(field("MY_GRIDSQUARE", myGrid)) }
+            parts.append("<EOR>")
+            out += parts.joined(separator: " ") + "\n\n"
+        }
+        return out
+    }
+
+    private static func adifBand(hz: Int) -> String {
+        switch hz {
+        case 1_800_000...2_000_000:   return "160M"
+        case 3_500_000...4_000_000:   return "80M"
+        case 5_330_000...5_410_000:   return "60M"
+        case 7_000_000...7_300_000:   return "40M"
+        case 10_100_000...10_150_000: return "30M"
+        case 14_000_000...14_350_000: return "20M"
+        case 18_068_000...18_168_000: return "17M"
+        case 21_000_000...21_450_000: return "15M"
+        case 24_890_000...24_990_000: return "12M"
+        case 28_000_000...29_700_000: return "10M"
+        case 50_000_000...54_000_000: return "6M"
+        default: return "HF"
+        }
     }
 
     func parseDecodedLine(_ line: String, myCall: String) -> DecodedMessage? {
@@ -367,10 +517,12 @@ final class FT8ViewModel {
                 isDirectedToMe: false
             )
         }
-        let caller = tokens[0]
-        let to = tokens[1]
+        // FT8 wire format: DESTINATION CALLER PAYLOAD
+        // e.g. "AI5OS KB9DED EN54" → to=AI5OS caller=KB9DED payload=EN54
+        let to = tokens[0]
+        let caller = tokens[1]
+        guard Self.looksLikeHamCallsign(to) else { return nil }
         guard Self.looksLikeHamCallsign(caller) else { return nil }
-        guard Self.looksLikeHamCallsign(to) || to == "CQ" else { return nil }
         let payload = tokens.dropFirst(2).joined(separator: " ")
         return DecodedMessage(
             receivedAt: Date(),
@@ -506,6 +658,7 @@ final class FT8ViewModel {
             guard self.rx12k.count >= need else {
                 DispatchQueue.main.async {
                     self.appendLog("Decode blocked: need \(Int(proto.slotDuration))s buffered (have \(Int(self.rxBufferedSeconds))s)")
+                    AppFileLogger.shared.log("FT8: decode blocked need=\(Int(proto.slotDuration))s have=\(String(format: "%.1f", self.rxBufferedSeconds))s")
                 }
                 return
             }
@@ -519,11 +672,14 @@ final class FT8ViewModel {
                     if results.isEmpty {
                         self.lastDecodeSummary = "No decodes"
                         self.appendLog("\(proto.rawValue) decode: no messages found")
+                        AppFileLogger.shared.log("FT8: decode complete: no messages")
                     } else {
                         self.lastDecodeSummary = "Decoded \(results.count) message\(results.count == 1 ? "" : "s")"
                         self.appendLog("\(proto.rawValue) decode: \(results.count) message(s)")
+                        AppFileLogger.shared.log("FT8: decode complete: \(results.count) message(s)")
                         self.autoSeqCandidates.removeAll()
                         for r in results {
+                            AppFileLogger.shared.log("FT8: decoded msg=\(r.message) snr=\(r.snr)")
                             self.processDecodedLine(r.message, snr: r.snr, myCall: myCall, myGrid: myGrid)
                         }
                         self.commitAutoSeq()
@@ -537,7 +693,8 @@ final class FT8ViewModel {
 
     /// After a full decode batch, pick the best candidate (per priority) and queue them.
     func commitAutoSeq() {
-        guard isAutoSequenceEnabled && isCQRunning && queuedTarget == nil
+        AppFileLogger.shared.log("FT8: commitAutoSeq candidates=\(autoSeqCandidates.count) autoReply=\(isAutoReplyEnabled) autoSeq=\(isAutoSequenceEnabled) isCQRunning=\(isCQRunning) queuedTarget=\(queuedTarget ?? "nil")")
+        guard (isAutoSequenceEnabled || isAutoReplyEnabled) && isCQRunning && queuedTarget == nil
                 && !autoSeqCandidates.isEmpty else {
             autoSeqCandidates.removeAll()
             return
@@ -603,6 +760,7 @@ final class FT8ViewModel {
         autoDecodeMyGrid = myGrid
         if enabled {
             appendLog("Auto-decode enabled (\(selectedProtocol.rawValue) \(Int(selectedProtocol.slotDuration))s slots)")
+            AppFileLogger.shared.log("FT8: auto-decode enabled proto=\(selectedProtocol.rawValue) myCall=\(myCall) myGrid=\(myGrid)")
             scheduleNextAutoDecodeTick()
         } else {
             appendLog("Auto-decode disabled")
@@ -629,6 +787,7 @@ final class FT8ViewModel {
                 return
             }
             self.appendLog("Auto-decode tick (\(self.selectedProtocol.rawValue))")
+            AppFileLogger.shared.log("FT8: auto-decode tick proto=\(self.selectedProtocol.rawValue) rxBuf=\(String(format: "%.1f", self.rxBufferedSeconds))s autoReply=\(self.isAutoReplyEnabled) autoSeq=\(self.isAutoSequenceEnabled) isCQRunning=\(self.isCQRunning)")
             self.decodeCurrentSlot(myCall: self.autoDecodeMyCall, myGrid: self.autoDecodeMyGrid)
             self.scheduleNextAutoDecodeTick()
         }
@@ -875,6 +1034,18 @@ struct FT8SectionView: View {
                     }
                     .frame(minWidth: 100)
                     .accessibilityLabel("FT8 band")
+                    .onChange(of: selectedPresetID) { _, _ in
+                        let hz = selectedFrequencyHz
+                        vm.currentDialHz = hz
+                        radio.send(KenwoodCAT.setVFOAFrequencyHz(hz))
+                        if forceUSB {
+                            radio.send(KenwoodCAT.setOperatingMode(.usb))
+                        }
+                        if forceDataMode {
+                            radio.send(KenwoodCAT.setModeMD(2))
+                        }
+                        AppFileLogger.shared.log("FT8: band change hz=\(hz) preset=\(selectedPresetID)")
+                    }
 
                     if selectedPresetID == "manual" {
                         TextField("MHz", text: $frequencyOverrideMHz)
@@ -1053,6 +1224,7 @@ struct FT8SectionView: View {
         // Snapshot what we know now (best-effort). If values are unknown,
         // we won't try to restore them.
         vm.preFT8FrequencyHz = radio.vfoAFrequencyHz
+        vm.currentDialHz = hz
         vm.preFT8Mode = radio.operatingMode
         vm.preFT8DataModeEnabled = radio.dataModeEnabled
         vm.preFT8MDMode = radio.mdMode
@@ -1145,6 +1317,7 @@ struct FT8SectionView: View {
             return
         }
         guard vm.isFT8Running else { return }
+        vm.cqTickGeneration += 1
         vm.isCQRunning = true
         vm.appendLog("CQ loop started parity=\(vm.cqParityRaw) txArmed=\(vm.isTxArmed)")
         AppFileLogger.shared.log("FT8: CQ start parity=\(vm.cqParityRaw) txArmed=\(vm.isTxArmed)")
@@ -1154,6 +1327,11 @@ struct FT8SectionView: View {
     private func stopCQ() {
         vm.isCQRunning = false
         vm.nextCQTxAt = nil
+        vm.queuedTarget = nil
+        vm.sameMessageTxCount = 0
+        vm.lastTransmittedText = ""
+        vm.cqTickGeneration += 1
+        vm.plannedTxText = ""
         vm.appendLog("CQ loop stopped")
         vm.lastTxSummary = "CQ stopped; TX idle."
         AppFileLogger.shared.log("FT8: CQ stop")
@@ -1176,10 +1354,12 @@ struct FT8SectionView: View {
         let next = Date(timeIntervalSince1970: TimeInterval(t))
         vm.nextCQTxAt = next
 
-        // Fire once at the next matching boundary; reschedule after each tick.
+        // Capture the current generation so orphaned chains from a previous
+        // start/stop cycle discard themselves rather than double-firing.
+        let generation = vm.cqTickGeneration
         let dt = max(0.01, next.timeIntervalSinceNow)
         DispatchQueue.main.asyncAfter(deadline: .now() + dt) {
-            guard vm.isCQRunning else { return }
+            guard vm.isCQRunning, vm.cqTickGeneration == generation else { return }
             cqTick(at: next)
             scheduleNextCQTick()
         }
@@ -1196,7 +1376,28 @@ struct FT8SectionView: View {
         let msg: String
         if isQueued {
             msg = vm.plannedTxText
+            // Track how many times we've sent the same message without advancement.
+            // Closing messages (73/RRR) get 3 retries; mid-QSO stalls get 6.
+            if msg == vm.lastTransmittedText {
+                vm.sameMessageTxCount += 1
+            } else {
+                vm.sameMessageTxCount = 1
+                vm.lastTransmittedText = msg
+            }
+            let isClosing = msg.hasSuffix(" 73") || msg.hasSuffix(" RRR")
+            let limit = isClosing ? 3 : 6
+            if vm.sameMessageTxCount >= limit {
+                let timedOut = vm.queuedTarget ?? "?"
+                vm.queuedTarget = nil
+                vm.sameMessageTxCount = 0
+                vm.lastTransmittedText = ""
+                vm.plannedTxText = ""
+                vm.appendLog("Auto-cleared \(timedOut): no response after \(limit) TX of \(msg)")
+                AppFileLogger.shared.log("FT8: auto-cleared queuedTarget=\(timedOut) after \(limit) TX")
+            }
         } else {
+            vm.sameMessageTxCount = 0
+            vm.lastTransmittedText = ""
             msg = "CQ \(call) \(grid)"
             vm.txText = msg
             vm.plannedTxText = msg
@@ -1324,9 +1525,44 @@ private struct FT8SettingsSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                // ── Auto-Sequence ─────────────────────────────────────────────
-                GroupBox("Auto-Sequence") {
+                // ── QSO Log ──────────────────────────────────────────────────
+                GroupBox("QSO Log") {
                     VStack(alignment: .leading, spacing: 10) {
+                        let total     = vm.loggedQSOs.count
+                        let confirmed = vm.loggedQSOs.filter(\.confirmed).count
+                        Text("\(total) contact\(total == 1 ? "" : "s") (\(confirmed) confirmed)")
+                            .font(.subheadline)
+                            .accessibilityLabel("\(total) contacts this session, \(confirmed) confirmed")
+
+                        HStack(spacing: 12) {
+                            Button("Export ADIF…") {
+                                let panel = NSSavePanel()
+                                panel.title           = "Export FT8 QSO Log"
+                                panel.nameFieldStringValue = "ft8-qsos.adi"
+                                panel.allowedContentTypes  = [.init(filenameExtension: "adi")!]
+                                panel.canCreateDirectories = true
+                                if panel.runModal() == .OK, let url = panel.url {
+                                    let adif = vm.exportADIF(myCall: myCallsign, myGrid: myGrid)
+                                    try? adif.write(to: url, atomically: true, encoding: .utf8)
+                                }
+                            }
+                            .disabled(vm.loggedQSOs.isEmpty)
+                            .accessibilityLabel("Export FT8 QSO log as ADIF file")
+
+                            Button("Clear Log") { vm.clearLoggedQSOs() }
+                                .disabled(vm.loggedQSOs.isEmpty)
+                                .accessibilityLabel("Clear FT8 QSO log")
+                        }
+
+                        Text("Logs every station that calls you. ADIF can be imported into most logging programs.")
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                // ── Auto-Sequence ─────────────────────────────────────────────
+                GroupBox("Auto-Sequence") {                    VStack(alignment: .leading, spacing: 10) {
                         Toggle("Auto-sequence while CQ is running", isOn: $vm.isAutoSequenceEnabled)
                             .accessibilityLabel("Auto-sequence responding stations")
                         if vm.isAutoSequenceEnabled {

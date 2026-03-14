@@ -831,4 +831,90 @@ enum KenwoodCAT {
     /// Trigger the radio to fetch time from its configured NTP server immediately.  `CK8;`
     /// Radio must have CK6=1 (auto-sync ON) and a valid NTP server set via CK7.
     static func triggerRadioNTPSync() -> String { "CK8;" }
+
+    // MARK: - Antenna Selection (AN)
+
+    static func getAntenna() -> String { "AN;" }
+
+    /// Set antenna parameters. Use 9 for any parameter you are not changing.
+    /// - port: 1=ANT1, 2=ANT2, 9=no change
+    /// - rxAnt: 0=RX ANT not used, 1=used, 9=no change
+    /// - driveOut: 0=Drive out OFF, 1=ON, 9=no change
+    /// - antennaOut: 0=Antenna output OFF, 1=ON, 9=no change
+    static func setAntenna(port: Int, rxAnt: Int, driveOut: Int, antennaOut: Int) -> String {
+        "AN\(port)\(rxAnt)\(driveOut)\(antennaOut);"
+    }
+
+    // MARK: - APF Audio Peak Filter (AP0–AP3)
+
+    enum APFBandwidth: Int, CaseIterable, Identifiable {
+        case nar = 0, mid = 1, wide = 2
+        var id: Int { rawValue }
+        var label: String { ["NAR", "MID", "WIDE"][rawValue] }
+    }
+
+    /// AP0: 1=APF OFF, 2=APF ON (note: not 0/1 — per PC Command Reference).
+    static func getAPFEnabled() -> String { "AP0;" }
+    static func setAPFEnabled(_ on: Bool) -> String { "AP0\(on ? 2 : 1);" }
+
+    /// AP1 shift: 00–80, 40=center (CW pitch freq), each step=5 Hz.
+    static func getAPFShift() -> String { "AP1;" }
+    static func setAPFShift(_ value: Int) -> String {
+        let clamped = max(0, min(value, 80))
+        return String(format: "AP1%02d;", clamped)
+    }
+    /// Reset APF shift to center (set command only).
+    static func resetAPFShift() -> String { "AP199;" }
+
+    static func getAPFBandwidth() -> String { "AP2;" }
+    static func setAPFBandwidth(_ bw: APFBandwidth) -> String { "AP2\(bw.rawValue);" }
+
+    /// AP3 gain: 0–6. 9=reset to factory default (set only).
+    static func getAPFGain() -> String { "AP3;" }
+    static func setAPFGain(_ gain: Int) -> String {
+        let clamped = max(0, min(gain, 6))
+        return "AP3\(clamped);"
+    }
+
+    // MARK: - Band Selection (BD / BU)
+
+    /// Select a specific band on the operating VFO (Set 1).
+    /// band: 0=1.8 MHz, 1=3.5, 2=7, 3=10, 4=14, 5=18, 6=21, 7=24, 8=28, 9=50, 10=General.
+    static func setBand(_ band: Int) -> String {
+        let clamped = max(0, min(band, 10))
+        return String(format: "BD0%02d;", clamped)
+    }
+
+    /// Read current band for VFO. P1: 0=VFO A, 1=VFO B.
+    static func getBand(_ vfo: VFO = .a) -> String { "BD\(vfo.rawValue);" }
+
+    // MARK: - Scan (SC0, SC1)
+
+    static func getScanState() -> String { "SC0;" }
+    static func setScanEnabled(_ on: Bool) -> String { "SC0\(on ? 1 : 0);" }
+
+    static func getScanSpeed() -> String { "SC1;" }
+    /// Scan speed: 1–9.
+    static func setScanSpeed(_ speed: Int) -> String {
+        let clamped = max(1, min(speed, 9))
+        return "SC1\(clamped);"
+    }
+
+    /// SC2 — Tone/CTCSS scan mode (FM only). 0=Off, 1=Tone, 2=CTCSS.
+    enum ToneScanMode: Int, CaseIterable, Identifiable {
+        case off = 0, tone = 1, ctcss = 2
+        var id: Int { rawValue }
+        var label: String { ["Off", "Tone", "CTCSS"][rawValue] }
+    }
+    static func getToneScanMode() -> String { "SC2;" }
+    static func setToneScanMode(_ mode: ToneScanMode) -> String { "SC2\(mode.rawValue);" }
+
+    /// SC3 — Scan type. 0=Program scan, 1=VFO scan.
+    enum ScanType: Int, CaseIterable, Identifiable {
+        case program = 0, vfo = 1
+        var id: Int { rawValue }
+        var label: String { ["Program", "VFO"][rawValue] }
+    }
+    static func getScanType() -> String { "SC3;" }
+    static func setScanType(_ type: ScanType) -> String { "SC3\(type.rawValue);" }
 }

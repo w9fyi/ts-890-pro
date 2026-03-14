@@ -224,9 +224,9 @@ extension RadioPanelView {
 
                 // Band + VFO ops
                 HStack(spacing: 8) {
-                    Button("Band ▼") { radio.send("DN;") }
+                    Button("Band ▼") { radio.bandStepDown() }
                         .accessibilityHint("Step band down")
-                    Button("Band ▲") { radio.send("UP;") }
+                    Button("Band ▲") { radio.bandStepUp() }
                         .accessibilityHint("Step band up")
                     Button("A=B") {
                         radio.send("VV;")

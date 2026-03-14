@@ -208,6 +208,7 @@ private struct DSPToolbarRow: View {
                 radio.cycleAGCMode()
             }
             FilterSlotButton(radio: radio)
+            APFButton(radio: radio)
 
             Spacer()
 
@@ -479,6 +480,164 @@ private struct FilterSlotPopoverContent: View {
     }
 }
 
+// MARK: - APF button
+
+/// Toggle button for the CW Audio Peak Filter. Long-press / right-click opens a popover
+/// to adjust shift, bandwidth, and gain.
+private struct APFButton: View {
+    let radio: RadioState
+    @State private var showPopover = false
+
+    var body: some View {
+        Button(radio.apfEnabled == true ? "APF: ON" : "APF") {
+            radio.setAPFEnabled(!(radio.apfEnabled ?? false))
+        }
+        .buttonStyle(CompactButtonStyle(isActive: radio.apfEnabled == true))
+        .accessibilityLabel("Audio Peak Filter")
+        .accessibilityValue(radio.apfEnabled == true ? "On" : "Off")
+        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+            APFPopoverContent(radio: radio)
+                .padding(12)
+                .frame(minWidth: 280)
+        }
+        .contextMenu {
+            Button("APF Settings…") { showPopover = true }
+        }
+    }
+}
+
+private struct APFPopoverContent: View {
+    let radio: RadioState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Audio Peak Filter")
+                .font(.headline)
+
+            Toggle("APF On", isOn: Binding(
+                get: { radio.apfEnabled ?? false },
+                set: { radio.setAPFEnabled($0) }
+            ))
+
+            Divider()
+
+            // Shift: 0–80, 40 = center (CW pitch). Display as Hz offset from center.
+            let shiftVal = radio.apfShift ?? 40
+            let shiftHz = (shiftVal - 40) * 5
+            Text("Shift: \(shiftHz >= 0 ? "+" : "")\(shiftHz) Hz")
+                .font(.subheadline)
+            Slider(value: Binding(
+                get: { Double(shiftVal) },
+                set: { radio.setAPFShift(Int($0)) }
+            ), in: 0...80, step: 1)
+            .accessibilityLabel("APF shift")
+            .accessibilityValue("\(shiftHz >= 0 ? "+" : "")\(shiftHz) Hz")
+
+            Button("Reset to Center") { radio.send(KenwoodCAT.resetAPFShift()) }
+                .buttonStyle(.borderless)
+                .font(.subheadline)
+
+            Divider()
+
+            Picker("Bandwidth", selection: Binding(
+                get: { radio.apfBandwidth ?? .mid },
+                set: { radio.setAPFBandwidth($0) }
+            )) {
+                ForEach(KenwoodCAT.APFBandwidth.allCases) { bw in
+                    Text(bw.label).tag(bw)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Divider()
+
+            let gainVal = radio.apfGain ?? 3
+            Text("Gain: \(gainVal)")
+                .font(.subheadline)
+            Slider(value: Binding(
+                get: { Double(gainVal) },
+                set: { radio.setAPFGain(Int($0)) }
+            ), in: 0...6, step: 1)
+            .accessibilityLabel("APF gain")
+            .accessibilityValue("\(gainVal)")
+        }
+        .controlSize(.small)
+    }
+}
+
+/// Scan toggle. Right-click / long-press opens a popover to set speed, type, and tone scan.
+private struct ScanButton: View {
+    let radio: RadioState
+    @State private var showPopover = false
+
+    var body: some View {
+        Button(radio.scanActive ? "SCAN: ON" : "SCAN") {
+            if radio.scanActive { radio.stopScan() } else { radio.startMemoryScan() }
+        }
+        .buttonStyle(CompactButtonStyle(isActive: radio.scanActive))
+        .accessibilityLabel("Memory scan")
+        .accessibilityValue(radio.scanActive ? "On" : "Off")
+        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+            ScanPopoverContent(radio: radio)
+                .padding(12)
+                .frame(minWidth: 240)
+        }
+        .contextMenu {
+            Button("Scan Settings…") { showPopover = true }
+        }
+    }
+}
+
+private struct ScanPopoverContent: View {
+    let radio: RadioState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Scan Settings")
+                .font(.headline)
+
+            // Speed: 1–9
+            let speed = radio.scanSpeed ?? 5
+            Text("Speed: \(speed)")
+                .font(.subheadline)
+            Slider(value: Binding(
+                get: { Double(speed) },
+                set: { radio.setScanSpeed(Int($0)) }
+            ), in: 1...9, step: 1)
+            .accessibilityLabel("Scan speed")
+            .accessibilityValue("\(speed)")
+
+            Divider()
+
+            // Scan type: Program / VFO
+            Picker("Scan type", selection: Binding(
+                get: { radio.scanType ?? .program },
+                set: { radio.setScanType($0) }
+            )) {
+                ForEach(KenwoodCAT.ScanType.allCases) { t in
+                    Text(t.label).tag(t)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Divider()
+
+            // Tone scan (FM only)
+            Picker("Tone scan", selection: Binding(
+                get: { radio.toneScanMode ?? .off },
+                set: { radio.setToneScanMode($0) }
+            )) {
+                ForEach(KenwoodCAT.ToneScanMode.allCases) { m in
+                    Text(m.label).tag(m)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityLabel("Tone/CTCSS scan mode")
+        }
+        .controlSize(.small)
+    }
+}
+
 // MARK: - Connect button
 // Isolated so connectionStatus changes don't invalidate DSPToolbarRow's layout.
 
@@ -583,6 +742,8 @@ private struct ModeRow: View {
                 .accessibilityLabel("Speech processor")
                 .accessibilityValue(radio.speechProcEnabled == true ? "On" : "Off")
 
+            ScanButton(radio: radio)
+
             Spacer()
         }
         .controlSize(.small)
@@ -618,6 +779,12 @@ private struct VFORow: View {
                     .foregroundColor(.secondary)
                 HStack(spacing: 4) {
                     bandMenu(vfo: "A", currentHz: radio.vfoAFrequencyHz)
+                    Button("◀") { radio.bandStepDown() }
+                        .buttonStyle(CompactButtonStyle())
+                        .accessibilityLabel("Band down")
+                    Button("▶") { radio.bandStepUp() }
+                        .buttonStyle(CompactButtonStyle())
+                        .accessibilityLabel("Band up")
                     TextField("", text: $freqAString)
                         .font(.system(size: 32, weight: .light, design: .monospaced))
                         .foregroundColor(.green)
@@ -947,6 +1114,13 @@ private struct TXRow: View {
             Button("Stop") { radio.send("AC110;") }
                 .buttonStyle(CompactButtonStyle())
                 .accessibilityLabel("Stop ATU tuning")
+
+            Divider().frame(height: 18)
+
+            Button("ANT: \(radio.antennaPort == 2 ? "2" : "1")") { radio.cycleAntennaPort() }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Antenna port")
+                .accessibilityValue("ANT \(radio.antennaPort == 2 ? "2" : "1")")
 
             Spacer()
 

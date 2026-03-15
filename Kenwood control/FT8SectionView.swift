@@ -54,6 +54,12 @@ final class FT8ViewModel {
     var isAutoDecodeEnabled: Bool = false
     var selectedProtocol: FT8Protocol = .ft8
     var queuedTarget: String?
+    // Set when a station is queued so we know what to do after the QSO ends:
+    // true  → we were CQing before picking the station; resume CQ after completion.
+    // false → search-and-pounce; stop TX (keep RX decode running) after completion.
+    var wasCallingCQBeforeTarget: Bool = false
+    // Set by autoReply when the other station sends 73; cqTick reads and acts on it.
+    var pendingQSOComplete: Bool = false
     var sameMessageTxCount: Int = 0
     var lastTransmittedText: String = ""
     var cqTickGeneration: Int = 0
@@ -319,7 +325,9 @@ final class FT8ViewModel {
         return theyUsedEvenSlot ? .odd : .even
     }
 
-    func queueTarget(_ call: String, for msg: DecodedMessage, myCall: String, myGrid: String) {
+    func queueTarget(_ call: String, for msg: DecodedMessage, myCall: String, myGrid: String, fromCQ: Bool = false) {
+        wasCallingCQBeforeTarget = fromCQ
+        pendingQSOComplete = false
         queuedTarget = call
         fillReply(for: msg, myCall: myCall, myGrid: myGrid)
         appendLog("Queued target: \(call)")
@@ -404,9 +412,12 @@ final class FT8ViewModel {
         }
 
         if third == "73" {
-            // They sent 73 — QSO complete, no reply needed. Clear the target now.
+            // They sent 73 — QSO complete, no reply needed.
             qsoStageByCaller[caller] = .sent73
-            if queuedTarget == caller { queuedTarget = nil }
+            if queuedTarget == caller {
+                queuedTarget = nil
+                pendingQSOComplete = true   // cqTick will stop or resume CQ on next slot
+            }
             return nil
         }
 
@@ -709,7 +720,7 @@ final class FT8ViewModel {
             winner = autoSeqCandidates.max(by: { ($0.distKm ?? 0) < ($1.distKm ?? 0) })?.msg
         }
         if let w = winner {
-            queueTarget(w.caller, for: w, myCall: autoDecodeMyCall, myGrid: autoDecodeMyGrid)
+            queueTarget(w.caller, for: w, myCall: autoDecodeMyCall, myGrid: autoDecodeMyGrid, fromCQ: true)
             appendLog("AutoSeq: queued \(w.caller) (\(autoSequencePriority.rawValue))")
             AppFileLogger.shared.log("FT8 AutoSeq: queued \(w.caller) priority=\(autoSequencePriority.rawValue)")
         }
@@ -1110,7 +1121,8 @@ struct FT8SectionView: View {
                     // Determine which TX cycle is opposite to the station we're calling.
                     let parity = vm.oppositeParityFor(msg)
                     vm.cqParityRaw = parity.rawValue
-                    vm.queueTarget(msg.caller, for: msg, myCall: myCallsign, myGrid: myGrid)
+                    vm.queueTarget(msg.caller, for: msg, myCall: myCallsign, myGrid: myGrid,
+                                   fromCQ: vm.isCQRunning && vm.queuedTarget == nil)
                     // Auto-start (or restart on the correct cycle) when FT8 is running.
                     guard vm.isFT8Running else { return }
                     if vm.isCQRunning { stopCQ() }
@@ -1388,7 +1400,7 @@ struct FT8SectionView: View {
         // instead of a bare CQ.  The auto-reply state machine keeps plannedTxText
         // updated as the QSO progresses slot by slot.
         let isQueued = vm.queuedTarget != nil && !vm.plannedTxText.isEmpty
-        let msg: String
+        var msg: String = ""
         if isQueued {
             msg = vm.plannedTxText
             // Track how many times we've sent the same message without advancement.
@@ -1409,10 +1421,34 @@ struct FT8SectionView: View {
                 vm.plannedTxText = ""
                 vm.appendLog("Auto-cleared \(timedOut): no response after \(limit) TX of \(msg)")
                 AppFileLogger.shared.log("FT8: auto-cleared queuedTarget=\(timedOut) after \(limit) TX")
+                // QSO ended (stall/timeout): stop TX or resume CQ based on context.
+                if vm.wasCallingCQBeforeTarget {
+                    vm.wasCallingCQBeforeTarget = false
+                    vm.appendLog("QSO ended (stall): resuming CQ")
+                    msg = "CQ \(call) \(grid)"
+                    vm.txText = msg
+                    vm.plannedTxText = msg
+                } else {
+                    stopCQ()
+                    vm.appendLog("QSO ended (stall): TX stopped, RX decode continues")
+                    return
+                }
             }
         } else {
             vm.sameMessageTxCount = 0
             vm.lastTransmittedText = ""
+            // QSO completed cleanly (they sent 73): stop TX or resume CQ based on context.
+            if vm.pendingQSOComplete {
+                vm.pendingQSOComplete = false
+                if vm.wasCallingCQBeforeTarget {
+                    vm.wasCallingCQBeforeTarget = false
+                    vm.appendLog("QSO complete: resuming CQ")
+                } else {
+                    stopCQ()
+                    vm.appendLog("QSO complete: TX stopped, RX decode continues")
+                    return
+                }
+            }
             msg = "CQ \(call) \(grid)"
             vm.txText = msg
             vm.plannedTxText = msg

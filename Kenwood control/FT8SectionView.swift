@@ -1236,6 +1236,7 @@ struct FT8SectionView: View {
         ].compactMap { $0 }.joined(separator: ", ")
 
         vm.clearDecodedMessages()   // fresh list on each Start
+        ft8_bridge_clear_callsigns() // reset hash table so it never fills and hangs
         vm.isFT8Running = true
         vm.isTxArmed = true
         vm.appendLog("FT8 start: tuning to \(dialFrequencyLabelHz(hz))")
@@ -1258,6 +1259,19 @@ struct FT8SectionView: View {
             // TS-890 appears to use MD for USB-DATA (DA is rejected by the radio).
             radio.send(KenwoodCAT.setModeMD(2))
             radio.send(KenwoodCAT.getModeMD())
+        }
+        // The TS-890S applies band-memory mode asynchronously after an FA band change,
+        // which can override the OM/MD commands above. Re-assert mode after a short
+        // settle delay so we win the race.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak vm] in
+            guard vm?.isFT8Running == true else { return }
+            if forceUSB {
+                radio.send(KenwoodCAT.setOperatingMode(.usb))
+            }
+            if forceDataMode {
+                radio.send(KenwoodCAT.setModeMD(2))
+                radio.send(KenwoodCAT.getModeMD())
+            }
         }
 
         // Start LAN RX audio if requested (best-effort: uses last host).

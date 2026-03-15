@@ -41,7 +41,8 @@ void ft8_bridge_clear_callsigns(void) {
 void ft8_bridge_add_callsign(const char* callsign, uint32_t n22) {
     uint16_t h10 = (uint16_t)((n22 >> 12) & 0x3FFu);
     int idx = (h10 * 23) % FT8B_HASH_SIZE;
-    while (s_ht[idx].callsign[0] != '\0') {
+    for (int n = 0; n < FT8B_HASH_SIZE; ++n) {
+        if (s_ht[idx].callsign[0] == '\0') break;
         if (((s_ht[idx].hash & 0x3FFFFFu) == (n22 & 0x3FFFFFu)) &&
             strcmp(s_ht[idx].callsign, callsign) == 0) {
             s_ht[idx].hash &= 0x3FFFFFu; // reset age
@@ -62,7 +63,8 @@ static bool s_lookup_hash(ftx_callsign_hash_type_t hash_type, uint32_t hash, cha
                     (hash_type == FTX_CALLSIGN_HASH_12_BITS) ? 10u : 0u;
     uint16_t h10 = (uint16_t)((hash >> (12u - shift)) & 0x3FFu);
     int idx = (h10 * 23) % FT8B_HASH_SIZE;
-    while (s_ht[idx].callsign[0] != '\0') {
+    for (int n = 0; n < FT8B_HASH_SIZE; ++n) {
+        if (s_ht[idx].callsign[0] == '\0') break;
         if (((s_ht[idx].hash & 0x3FFFFFu) >> shift) == hash) {
             strcpy(callsign, s_ht[idx].callsign);
             return true;

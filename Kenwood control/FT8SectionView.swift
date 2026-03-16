@@ -308,6 +308,11 @@ final class FT8ViewModel {
     // MARK: - Spectrum Scan
 
     func scanForClearFreq() -> Float {
+        // When no signals have been decoded, every candidate frequency appears equally
+        // "clear" (infinite distance from any occupied freq). The loop would set bestFreq
+        // to lo (300 Hz) on its first iteration — wrong and harmful: 300 Hz is at the
+        // hard edge of the SSB passband and is heavily attenuated by most audio paths.
+        guard !occupiedFreqs.isEmpty else { return 1500 }
         let lo: Float = 300, hi: Float = 3000, step: Float = 25, gap: Float = 50
         var bestFreq: Float = 1500
         var bestClearance: Float = 0

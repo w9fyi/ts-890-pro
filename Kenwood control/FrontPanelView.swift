@@ -778,7 +778,7 @@ private struct VFORow: View {
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
                 HStack(spacing: 4) {
-                    bandMenu(vfo: "A", currentHz: radio.vfoAFrequencyHz)
+                    bandMenu(vfo: "A")
                     Button("◀") { radio.bandStepDown() }
                         .buttonStyle(CompactButtonStyle())
                         .accessibilityLabel("Band down")
@@ -807,7 +807,7 @@ private struct VFORow: View {
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
                 HStack(spacing: 4) {
-                    bandMenu(vfo: "B", currentHz: radio.vfoBFrequencyHz)
+                    bandMenu(vfo: "B")
                     TextField("", text: $freqBString)
                         .font(.system(size: 32, weight: .light, design: .monospaced))
                         .foregroundColor(Color(red: 0.6, green: 0.8, blue: 1.0))
@@ -909,7 +909,9 @@ private struct VFORow: View {
         return "\(whole) point \(String(format: "%03d", frac)) megahertz"
     }
 
-    private func switchBand(label: String, defaultHz: Int, vfo: String, currentHz: Int?) {
+    private func switchBand(label: String, defaultHz: Int, vfo: String) {
+        // Read the live frequency from radio (reference type) at press time — not a captured value.
+        let currentHz = vfo == "A" ? radio.vfoAFrequencyHz : radio.vfoBFrequencyHz
         if let hz = currentHz, let band = fpCurrentBandLabel(hz: hz) {
             UserDefaults.standard.set(hz, forKey: "bandFreq_\(vfo)_\(band)")
         }
@@ -921,12 +923,11 @@ private struct VFORow: View {
         fpAnnounce("VFO \(vfo): \(label)")
     }
 
-    private func bandMenu(vfo: String, currentHz: Int?) -> some View {
+    private func bandMenu(vfo: String) -> some View {
         Menu("Band") {
             ForEach(fpBands, id: \.label) { band in
                 Button(band.label) {
-                    switchBand(label: band.label, defaultHz: band.defaultHz,
-                               vfo: vfo, currentHz: currentHz)
+                    switchBand(label: band.label, defaultHz: band.defaultHz, vfo: vfo)
                 }
             }
         }

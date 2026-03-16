@@ -12,6 +12,13 @@ import Foundation
 import AppKit
 import UniformTypeIdentifiers
 
+struct TxEntry: Identifiable {
+    let id = UUID()
+    let timestamp: Date
+    let message: String
+    let freqHz: Float
+}
+
 @Observable
 final class FT8ViewModel {
     nonisolated deinit {}
@@ -71,6 +78,23 @@ final class FT8ViewModel {
     private var qsoStageByCaller: [String: Stage] = [:]
     private var pendingDecodedMessages: [DecodedMessage] = []
     private var alertedCallers: Set<String> = []
+
+    // Feature: TX message history
+    var txMessages: [TxEntry] = []
+
+    // Feature: Spectrum scan + Hold Frequency
+    var cqFreqHz: Float = 1500.0
+    var isCQFreqHeld: Bool = false
+    private var occupiedFreqs: [Float] = []
+
+    // Feature: CQ-only ingestion filter
+    var isCQOnlyFilter: Bool = UserDefaults.standard.bool(forKey: "FT8.CQOnlyFilter") {
+        didSet { UserDefaults.standard.set(isCQOnlyFilter, forKey: "FT8.CQOnlyFilter") }
+    }
+
+    // Feature: two-tap Clear
+    var clearArmed: Bool = false
+    private var clearArmTimer: Timer?
 
     enum Stage: String {
         case none
@@ -202,6 +226,9 @@ final class FT8ViewModel {
     }
 
     private func ingestDecodedMessage(_ msg: DecodedMessage) {
+        // CQ-only filter: drop messages that are neither CQ frames nor directed to us.
+        if isCQOnlyFilter && !msg.isDirectedToMe && msg.to.uppercased() != "CQ" { return }
+
         if msg.isDirectedToMe {
             if !alertedCallers.contains(msg.caller) {
                 // First time this station has called us this session.
@@ -278,6 +305,50 @@ final class FT8ViewModel {
         }
     }
 
+    // MARK: - Spectrum Scan
+
+    func scanForClearFreq() -> Float {
+        let lo: Float = 300, hi: Float = 3000, step: Float = 25, gap: Float = 50
+        var bestFreq: Float = 1500
+        var bestClearance: Float = 0
+        var f = lo
+        while f <= hi {
+            let minDist = occupiedFreqs.map { abs($0 - f) }.min() ?? Float.greatestFiniteMagnitude
+            if minDist > bestClearance { bestClearance = minDist; bestFreq = f }
+            f += step
+        }
+        return bestClearance >= gap ? bestFreq : 1500
+    }
+
+    // MARK: - Clear All
+
+    func armOrExecuteClear() {
+        if clearArmed {
+            clearArmTimer?.invalidate()
+            clearArmTimer = nil
+            clearArmed = false
+            clearAll()
+        } else {
+            clearArmed = true
+            clearArmTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+                self?.clearArmed = false
+            }
+        }
+    }
+
+    func clearAll() {
+        decodedMessages.removeAll()
+        pendingDecodedMessages.removeAll()
+        pendingDecodedMessagesCount = 0
+        queuedTarget = nil
+        alertedCallers.removeAll()
+        txMessages.removeAll()
+        activityLog.removeAll()
+        // Set flag directly — calling setHoldDecodedListUpdates(false) would flush pending
+        // messages into the list we just cleared.
+        holdDecodedListUpdates = false
+    }
+
     func flushPendingDecodedMessages() {
         guard !pendingDecodedMessages.isEmpty else { return }
         let count = pendingDecodedMessages.count
@@ -329,6 +400,12 @@ final class FT8ViewModel {
         wasCallingCQBeforeTarget = fromCQ
         pendingQSOComplete = false
         queuedTarget = call
+        // Search-and-pounce: cqFreqHz hasn't been set by a CQ scan yet, so pick a clear
+        // reply frequency now (unless the user has locked it with Hold).
+        if !fromCQ && !isCQFreqHeld {
+            cqFreqHz = scanForClearFreq()
+            AppFileLogger.shared.log("FT8: S&P reply freq=\(Int(cqFreqHz))Hz")
+        }
         fillReply(for: msg, myCall: myCall, myGrid: myGrid)
         appendLog("Queued target: \(call)")
         AppFileLogger.shared.log("FT8: queued target \(call)")
@@ -689,6 +766,7 @@ final class FT8ViewModel {
                         self.appendLog("\(proto.rawValue) decode: \(results.count) message(s)")
                         AppFileLogger.shared.log("FT8: decode complete: \(results.count) message(s)")
                         self.autoSeqCandidates.removeAll()
+                        self.occupiedFreqs = results.map { $0.freqHz }
                         for r in results {
                             AppFileLogger.shared.log("FT8: decoded msg=\(r.message) snr=\(r.snr)")
                             self.processDecodedLine(r.message, snr: r.snr, myCall: myCall, myGrid: myGrid)
@@ -1024,6 +1102,14 @@ struct FT8SectionView: View {
 
                     Spacer()
 
+                    Button(vm.clearArmed ? "Clear (confirm)" : "Clear") {
+                        vm.armOrExecuteClear()
+                    }
+                    .foregroundStyle(vm.clearArmed ? Color.red : Color.primary)
+                    .accessibilityLabel(vm.clearArmed
+                        ? "Confirm clear — tap again within 2 seconds to wipe all messages"
+                        : "Clear all decoded, transmitted, and activity messages")
+
                     Button(action: { showSettings = true }) {
                         Image(systemName: "gearshape")
                             .imageScale(.large)
@@ -1076,7 +1162,19 @@ struct FT8SectionView: View {
                     Toggle("Auto-Reply", isOn: $vm.isAutoReplyEnabled)
                         .accessibilityLabel("Auto-reply to directed calls")
 
+                    Toggle("CQ Only", isOn: $vm.isCQOnlyFilter)
+                        .accessibilityLabel("CQ-only filter. When on, non-CQ messages are suppressed except messages directed to you.")
+
                     Spacer()
+
+                    if vm.isCQRunning {
+                        Button(vm.isCQFreqHeld ? "Hold: \(Int(vm.cqFreqHz)) Hz" : "Auto Freq") {
+                            vm.isCQFreqHeld.toggle()
+                        }
+                        .accessibilityLabel(vm.isCQFreqHeld
+                            ? "Frequency locked at \(Int(vm.cqFreqHz)) hertz. Tap to unlock."
+                            : "Auto frequency selection active. Tap to lock.")
+                    }
 
                     if vm.isCQRunning {
                         if let next = vm.nextCQTxAt {
@@ -1172,6 +1270,39 @@ struct FT8SectionView: View {
                             : "Tap Start FT8 to begin receiving and decoding.")
                     )
                 }
+            }
+
+            // ─ TX message history ────────────────────────────────────────────
+            Divider()
+            HStack {
+                Text("Transmitted").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.top, 4)
+            if vm.txMessages.isEmpty {
+                Text("No transmissions yet")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .frame(height: 72)
+                    .accessibilityLabel("No transmissions yet")
+            } else {
+                List(vm.txMessages) { entry in
+                    HStack(spacing: 8) {
+                        Text(entry.timestamp, style: .time)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text("\(Int(entry.freqHz)) Hz")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(entry.message)
+                            .font(.caption)
+                    }
+                }
+                .frame(height: 72)
+                .listStyle(.plain)
+                .accessibilityLabel("Transmitted messages")
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -1359,6 +1490,8 @@ struct FT8SectionView: View {
         vm.lastTransmittedText = ""
         vm.cqTickGeneration += 1
         vm.plannedTxText = ""
+        vm.isCQFreqHeld = false
+        vm.cqFreqHz = 1500.0
         vm.appendLog("CQ loop stopped")
         vm.lastTxSummary = "CQ stopped; TX idle."
         AppFileLogger.shared.log("FT8: CQ stop")
@@ -1471,8 +1604,16 @@ struct FT8SectionView: View {
         let amplitude = vm.txAmplitude
         let radio     = radio
         let vm        = vm
+
+        // Spectrum scan: pick the clearest audio slot for bare CQ transmissions.
+        let isCQMsg = msg.hasPrefix("CQ ")
+        if isCQMsg && !vm.isCQFreqHeld {
+            vm.cqFreqHz = vm.scanForClearFreq()
+        }
+        let f0: Float = vm.cqFreqHz
+
         DispatchQueue.global(qos: .userInitiated).async {
-            guard let audio = FT8LibEncoder.encode(message: msg, protocol: proto) else {
+            guard let audio = FT8LibEncoder.encode(message: msg, protocol: proto, f0: f0) else {
                 AppFileLogger.shared.log("FT8: TX encode failed msg=\(msg)")
                 DispatchQueue.main.async {
                     vm.appendLog("TX encode failed: \(msg)")
@@ -1480,9 +1621,12 @@ struct FT8SectionView: View {
                 }
                 return
             }
-            AppFileLogger.shared.log("FT8: TX \(proto.rawValue) \(msg) (\(audio.count) samples)")
+            AppFileLogger.shared.log("FT8: TX \(proto.rawValue) \(msg) (\(audio.count) samples) f0=\(Int(f0))Hz")
             radio.transmitFT8Audio(samples12k: audio, amplitude: amplitude)
-            DispatchQueue.main.async { vm.lastTxSummary = "TX: \(msg)" }
+            DispatchQueue.main.async {
+                vm.txMessages.insert(TxEntry(timestamp: Date(), message: msg, freqHz: f0), at: 0)
+                vm.lastTxSummary = "TX: \(msg)"
+            }
         }
     }
 }

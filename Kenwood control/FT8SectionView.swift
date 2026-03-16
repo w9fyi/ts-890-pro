@@ -1465,11 +1465,19 @@ struct FT8SectionView: View {
             radio.send(KenwoodCAT.getModeMD())
         }
 
-        // Restore TX audio source (MS command). Default to hardware mic (MS010)
-        // so voice TX works even if the radio was already in an unusual state.
-        let restoreFront = vm.preFT8MSPttFront ?? 1
-        let restoreRear  = vm.preFT8MSPttRear  ?? 0
-        let msCmd = "MS0\(restoreFront)\(restoreRear);"
+        // Restore TX audio source (MS command).
+        // If LAN audio is still running we stay on KNS (MS003) so voice TX also
+        // travels through the network — no reason to switch away mid-session.
+        // Only fall back to the pre-FT8 snapshot (or hardware mic MS010) when
+        // LAN audio is not active.
+        let msCmd: String
+        if radio.isLanAudioRunning {
+            msCmd = "MS003;"
+        } else {
+            let restoreFront = vm.preFT8MSPttFront ?? 1
+            let restoreRear  = vm.preFT8MSPttRear  ?? 0
+            msCmd = "MS0\(restoreFront)\(restoreRear);"
+        }
         vm.appendLog("Restore: MS \(msCmd)")
         AppFileLogger.shared.log("FT8: restore MS \(msCmd)")
         radio.send(msCmd)

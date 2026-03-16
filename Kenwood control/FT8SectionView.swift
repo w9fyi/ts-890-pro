@@ -109,6 +109,8 @@ final class FT8ViewModel {
     var preFT8Mode: KenwoodCAT.OperatingMode?
     var preFT8DataModeEnabled: Bool?
     var preFT8MDMode: Int?
+    var preFT8MSPttFront: Int?   // radio.msPttFront before FT8 started
+    var preFT8MSPttRear: Int?    // radio.msPttRear  before FT8 started
 
     // Dial frequency active during this FT8 session — set by startFT8.
     var currentDialHz: Int = 0
@@ -1377,6 +1379,8 @@ struct FT8SectionView: View {
         }
         vm.preFT8DataModeEnabled = radio.dataModeEnabled
         vm.preFT8MDMode = radio.mdMode
+        vm.preFT8MSPttFront = radio.msPttFront
+        vm.preFT8MSPttRear  = radio.msPttRear
         vm.preFT8Summary = [
             vm.preFT8FrequencyHz != nil ? "freq=\(dialFrequencyLabelHz(vm.preFT8FrequencyHz!))" : nil,
             vm.preFT8Mode != nil ? "mode=\(vm.preFT8Mode!.label)" : nil,
@@ -1408,6 +1412,8 @@ struct FT8SectionView: View {
             radio.send(KenwoodCAT.setModeMD(2))
             radio.send(KenwoodCAT.getModeMD())
         }
+        // Route TX audio through LAN VoIP so FT8 tones reach the modulator.
+        radio.send("MS003;")
         // The TS-890S applies band-memory mode asynchronously after an FA band change,
         // which can override the OM/MD commands above. Re-assert mode after a short
         // settle delay so we win the race.
@@ -1420,6 +1426,8 @@ struct FT8SectionView: View {
                 radio.send(KenwoodCAT.setModeMD(2))
                 radio.send(KenwoodCAT.getModeMD())
             }
+            // Re-assert MS003 after band-memory settle.
+            radio.send("MS003;")
         }
 
         // Start LAN RX audio if requested (best-effort: uses last host).
@@ -1456,6 +1464,17 @@ struct FT8SectionView: View {
             radio.send(KenwoodCAT.setModeMD(md))
             radio.send(KenwoodCAT.getModeMD())
         }
+
+        // Restore TX audio source (MS command). Default to hardware mic (MS010)
+        // so voice TX works even if the radio was already in an unusual state.
+        let restoreFront = vm.preFT8MSPttFront ?? 1
+        let restoreRear  = vm.preFT8MSPttRear  ?? 0
+        let msCmd = "MS0\(restoreFront)\(restoreRear);"
+        vm.appendLog("Restore: MS \(msCmd)")
+        AppFileLogger.shared.log("FT8: restore MS \(msCmd)")
+        radio.send(msCmd)
+        vm.preFT8MSPttFront = nil
+        vm.preFT8MSPttRear  = nil
 
         if vm.isAutoDecodeEnabled {
             vm.setAutoDecodeEnabled(false, myCall: myCallsign, myGrid: myGrid)

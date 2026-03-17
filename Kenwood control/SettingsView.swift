@@ -47,6 +47,10 @@ struct SettingsView: View {
             RadioMenuView(radio: radio)
                 .tabItem { Label("Menu Access", systemImage: "list.bullet") }
                 .tag(8)
+
+            RigctldSettingsView(radio: radio)
+                .tabItem { Label("rigctld", systemImage: "antenna.radiowaves.left.and.right") }
+                .tag(9)
         }
         .frame(minWidth: 640, minHeight: 480)
     }
@@ -244,5 +248,110 @@ struct ConnectionSettingsTab: View {
             Text("Status: \(radio.connectionStatus)")
                 .font(.system(.body, design: .monospaced))
         }
+    }
+}
+
+// MARK: - rigctld Settings Tab
+
+struct RigctldSettingsView: View {
+    @Bindable var radio: RadioState
+    @State private var portString: String
+
+    init(radio: RadioState) {
+        self.radio = radio
+        _portString = State(initialValue: String(radio.rigctldPort))
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("rigctld Server")
+                    .font(.title2)
+                    .accessibilityAddTraits(.isHeader)
+
+                Text("Exposes a Hamlib-compatible TCP endpoint so WSJT-X, fldigi, JS8Call, flrig, and TillyMac can connect to TS-890 Pro as their radio backend.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Divider()
+
+                Toggle("Enable rigctld server", isOn: $radio.rigctldEnabled)
+                    .accessibilityHint("When on, TS-890 Pro listens on the configured port for Hamlib rigctld commands.")
+
+                HStack(spacing: 12) {
+                    Text("Port:")
+                    TextField("4532", text: $portString)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                        .onSubmit { applyPort() }
+                        .onChange(of: portString) { _, _ in applyPort() }
+                    Text("(default: \(RigctldServer.defaultPort))")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .disabled(!radio.rigctldEnabled)
+
+                if radio.rigctldEnabled {
+                    HStack(spacing: 6) {
+                        Image(systemName: "circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption2)
+                        Text("Listening on localhost:\(radio.rigctldPort)")
+                            .font(.callout)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("rigctld server active on port \(radio.rigctldPort)")
+                }
+
+                Divider()
+
+                Text("How to connect WSJT-X:")
+                    .font(.headline)
+                Text("Radio → Rig: Hamlib NET rigctl  |  Network Server: localhost:\(radio.rigctldPort)")
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+
+                Text("How to connect fldigi / JS8Call / flrig:")
+                    .font(.headline)
+                Text("Rig: rigctld  |  Host: localhost  |  Port: \(radio.rigctldPort)")
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+
+                Text("How to connect TillyMac:")
+                    .font(.headline)
+                Text("In TillyMac settings, set rigctld host: localhost, port: \(radio.rigctldPort)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                if !radio.rigctldLog.isEmpty {
+                    Divider()
+                    Text("Server Log")
+                        .font(.headline)
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(radio.rigctldLog.suffix(50), id: \.self) { line in
+                                Text(line)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                    .frame(height: 140)
+                    .background(Color.gray.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    Button("Clear Log") { radio.rigctldLog.removeAll() }
+                        .font(.callout)
+                }
+            }
+            .padding()
+        }
+        .frame(minWidth: 480)
+    }
+
+    private func applyPort() {
+        guard let p = Int(portString), p > 0, p <= 65535 else { return }
+        radio.rigctldPort = p
     }
 }

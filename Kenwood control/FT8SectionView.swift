@@ -224,6 +224,9 @@ final class FT8ViewModel {
             plannedTxText = reply
             txText = reply
             appendLog("Plan TX: \(reply)")
+            if reply.hasSuffix(" 73"), let caller = parsed?.caller {
+                markQSOConfirmed(caller: caller)
+            }
         }
     }
 
@@ -310,21 +313,60 @@ final class FT8ViewModel {
     // MARK: - Spectrum Scan
 
     func scanForClearFreq() -> Float {
-        // When no signals have been decoded, every candidate frequency appears equally
-        // "clear" (infinite distance from any occupied freq). The loop would set bestFreq
-        // to lo (300 Hz) on its first iteration — wrong and harmful: 300 Hz is at the
-        // hard edge of the SSB passband and is heavily attenuated by most audio paths.
-        guard !occupiedFreqs.isEmpty else { return 1500 }
-        let lo: Float = 300, hi: Float = 3000, step: Float = 25, gap: Float = 50
-        var bestFreq: Float = 1500
-        var bestClearance: Float = 0
-        var f = lo
-        while f <= hi {
-            let minDist = occupiedFreqs.map { abs($0 - f) }.min() ?? Float.greatestFiniteMagnitude
-            if minDist > bestClearance { bestClearance = minDist; bestFreq = f }
-            f += step
+        // Step at 6.25 Hz — the FT8 tone spacing — so every natural FT8 slot is reachable.
+        // Each signal occupies ~50 Hz (8 tones × 6.25 Hz); require that much clearance.
+        // Score candidates by clearance (capped at 150 Hz so band-edge positions don't win
+        // purely because they're far from everything) plus a bonus for the preferred mid-band
+        // zone (500–2500 Hz) where SSB audio paths are flattest. A gentle penalty pulls the
+        // winner away from the zone edges toward the centre, producing the kind of
+        // 1100–2200 Hz results WSJT-X favours.
+        let toneHz:    Float = 6.25
+        let signalBW:  Float = 50.0           // full bandwidth of one FT8 signal
+        let lo:        Float = 200
+        let hi:        Float = 3000
+        let preferLo:  Float = 500
+        let preferHi:  Float = 2500
+        let bandCenter: Float = (preferLo + preferHi) / 2   // 1500 Hz
+
+        // No signals decoded yet — pick a random position in the preferred zone.
+        guard !occupiedFreqs.isEmpty else {
+            let steps = Int((preferHi - preferLo) / toneHz)
+            return preferLo + Float(Int.random(in: 0..<steps)) * toneHz
         }
-        return bestClearance >= gap ? bestFreq : 1500
+
+        // Score a candidate frequency.  Returns nil when requireClear=true and
+        // the slot overlaps an existing signal.
+        func candidateScore(_ f: Float, requireClear: Bool) -> Float? {
+            let minDist = occupiedFreqs.map { abs($0 - f) }.min() ?? Float.greatestFiniteMagnitude
+            guard !requireClear || minDist >= signalBW else { return nil }
+            // Cap clearance contribution — prevents extreme band edges dominating.
+            let clearance = Swift.min(minDist, 150.0)
+            let inPreferred = f >= preferLo && f <= preferHi
+            let midBonus:      Float = inPreferred ? 80.0 : 0.0
+            // Gentle pull toward band centre within the preferred zone.
+            let centerPenalty: Float = inPreferred
+                ? abs(f - bandCenter) / (preferHi - preferLo) * 20.0
+                : 0.0
+            return clearance + midBonus - centerPenalty
+        }
+
+        func bestCandidate(requireClear: Bool) -> Float? {
+            var bestFreq:  Float?
+            var bestScore: Float = -Float.greatestFiniteMagnitude
+            var f = lo
+            while f <= hi {
+                if let s = candidateScore(f, requireClear: requireClear), s > bestScore {
+                    bestScore = s; bestFreq = f
+                }
+                f += toneHz
+            }
+            return bestFreq
+        }
+
+        // First pass: only fully-clear slots (≥ 50 Hz from every signal).
+        if let freq = bestCandidate(requireClear: true) { return freq }
+        // Second pass: band is crowded — pick the least congested slot.
+        return bestCandidate(requireClear: false) ?? 1500
     }
 
     // MARK: - Clear All
@@ -431,6 +473,7 @@ final class FT8ViewModel {
             txText = r
             plannedTxText = r
             appendLog("Fill TX from click: \(r)")
+            if r.hasSuffix(" 73") { markQSOConfirmed(caller: msg.caller) }
             return
         }
 
@@ -510,6 +553,17 @@ final class FT8ViewModel {
     }
 
     // MARK: - QSO Log helpers
+
+    /// Mark a QSO as confirmed once we have committed to sending 73.
+    /// Safe to call multiple times — no-ops if already confirmed.
+    private func markQSOConfirmed(caller: String) {
+        guard let idx = loggedQSOs.lastIndex(where: { $0.callsign == caller }) else { return }
+        guard !loggedQSOs[idx].confirmed else { return }
+        loggedQSOs[idx].confirmed = true
+        let line = "QSO confirmed: \(caller)"
+        appendLog(line)
+        AccessibilityNotification.Announcement(line).post()
+    }
 
     private func formatFT8SNR(_ snr: Float) -> String {
         let i = Int(snr.rounded())

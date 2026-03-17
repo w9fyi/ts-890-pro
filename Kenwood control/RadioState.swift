@@ -401,6 +401,31 @@ final class RadioState {
     var radioModel: KenwoodRadioModel = .ts890s
     var capabilities: KenwoodCapabilities = KenwoodCapabilities.capabilities(for: .ts890s)
 
+    // MARK: - rigctld server (Hamlib NET rigctl compatible endpoint)
+
+    /// Whether the rigctld server is enabled. Persisted across launches.
+    var rigctldEnabled: Bool = UserDefaults.standard.bool(forKey: "rigctld_enabled") {
+        didSet {
+            guard oldValue != rigctldEnabled else { return }
+            UserDefaults.standard.set(rigctldEnabled, forKey: "rigctld_enabled")
+            if rigctldEnabled { startRigctld() } else { stopRigctld() }
+        }
+    }
+    /// TCP port for the rigctld server. Default 4532. Persisted across launches.
+    var rigctldPort: Int = {
+        let saved = UserDefaults.standard.integer(forKey: "rigctld_port")
+        return saved > 0 ? saved : Int(RigctldServer.defaultPort)
+    }() {
+        didSet {
+            guard oldValue != rigctldPort else { return }
+            UserDefaults.standard.set(rigctldPort, forKey: "rigctld_port")
+            if rigctldEnabled { restartRigctld() }
+        }
+    }
+    /// Log messages from the rigctld server. Shown in Settings.
+    var rigctldLog: [String] = []
+    private var _rigctldServer: RigctldServer?
+
     private var connection: any CATTransport = TS890Connection()
     private var previousOperatingModeForDigital: KenwoodCAT.OperatingMode? = nil
     private let morsePlayer = MorseAudioPlayer()
@@ -583,9 +608,38 @@ final class RadioState {
         }
 
         wireCallbacks()
+
+        // Start rigctld server if it was enabled last session.
+        if rigctldEnabled { startRigctld() }
     }
 
     nonisolated deinit {}
+
+    // MARK: - rigctld server lifecycle
+
+    private func startRigctld() {
+        stopRigctld()   // ensure clean state
+        let server = RigctldServer(radioState: self)
+        server.onLog = { [weak self] msg in
+            guard let self else { return }
+            self.rigctldLog.append(msg)
+            if self.rigctldLog.count > 100 {
+                self.rigctldLog.removeFirst(self.rigctldLog.count - 100)
+            }
+        }
+        server.start(port: UInt16(clamping: rigctldPort))
+        _rigctldServer = server
+    }
+
+    private func stopRigctld() {
+        _rigctldServer?.stop()
+        _rigctldServer = nil
+    }
+
+    private func restartRigctld() {
+        stopRigctld()
+        startRigctld()
+    }
 
     // MARK: - Frame-drain state
     // Batches incoming CAT frames so we dispatch to main at most once per RunLoop

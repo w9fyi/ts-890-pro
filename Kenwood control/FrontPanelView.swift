@@ -910,17 +910,19 @@ private struct VFORow: View {
     }
 
     private func switchBand(label: String, defaultHz: Int, vfo: String) {
-        // Read the live frequency from radio (reference type) at press time — not a captured value.
-        let currentHz = vfo == "A" ? radio.vfoAFrequencyHz : radio.vfoBFrequencyHz
-        if let hz = currentHz, let band = fpCurrentBandLabel(hz: hz) {
-            UserDefaults.standard.set(hz, forKey: "bandFreq_\(vfo)_\(band)")
-        }
-        let stored   = UserDefaults.standard.integer(forKey: "bandFreq_\(vfo)_\(label)")
-        let targetHz = stored > 0 ? stored : defaultHz
-        radio.send(vfo == "A"
-            ? String(format: "FA%011d;", targetHz)
-            : String(format: "FB%011d;", targetHz))
         fpAnnounce("VFO \(vfo): \(label)")
+        if vfo == "A" {
+            radio.jumpToBand(label)
+        } else {
+            // VFO B — BD0 only moves VFO A, so use UserDefaults memory for B.
+            let currentHz = radio.vfoBFrequencyHz
+            if let hz = currentHz, let band = fpCurrentBandLabel(hz: hz) {
+                UserDefaults.standard.set(hz, forKey: "bandFreq_B_\(band)")
+            }
+            let stored = UserDefaults.standard.integer(forKey: "bandFreq_B_\(label)")
+            let targetHz = stored > 0 ? stored : defaultHz
+            radio.send(String(format: "FB%011d;", targetHz))
+        }
     }
 
     private func bandMenu(vfo: String) -> some View {

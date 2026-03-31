@@ -160,6 +160,13 @@ final class RadioState {
     var selectedNoiseReductionBackend: String = "Passthrough"
     var noiseReductionStrength: Double = 1.0
     var noiseReductionProfileRaw: String = NoiseReductionProfile.speech.rawValue
+    /// Passband width (Hz) fed to HFNoiseReductionProcessor. Lets users widen
+    /// to 4 kHz for better receive audio without touching the radio's IF filter.
+    var hfNRPassbandHz: Double = 2800
+    /// When true, passband auto-adjusts to the mode default on every mode change.
+    var hfNRAutoPassband: Bool = true
+    /// Enable the time-domain impulse blanker inside HFNoiseReductionProcessor.
+    var hfNRImpulseBlanker: Bool = true
     /// Which NR path the front-panel NR button controls (hardware vs software).
     var nrButtonMode: NRButtonMode = .hardware
     /// Current state of the software NR cycle (Off / ANR / EMNR).
@@ -432,6 +439,9 @@ final class RadioState {
     /// Proxy wrapping the active backend. Passed to LanAudioPipeline and AudioMonitor
     /// so backend switches (and enable/disable) immediately affect all running pipelines.
     private let processorProxy = NoiseReductionProcessorProxy(inner: PassthroughNoiseReduction())
+    /// Retains the active HFNoiseReductionProcessor so strength/passband changes
+    /// can update its config without recreating it.
+    private var hfNRProcessor: HFNoiseReductionProcessor?
     private var noiseProcessor: any NoiseReductionProcessor {
         get { processorProxy.inner }
         set {
@@ -485,6 +495,9 @@ final class RadioState {
     private let nrStrengthKey        = "nr_strength"
     private let nrProfileKey         = "nr_profile"
     private let nrBackendKey         = "nr_backend"
+    private let nrPassbandKey        = "nr_hf_passband_hz"
+    private let nrAutoPassbandKey    = "nr_hf_auto_passband"
+    private let nrImpulseBlankerKey  = "nr_hf_impulse_blanker"
     private let lanAudioOutputUIDKey = "lan_audio_output_uid"
     private let lanMicInputUIDKey    = "lan_mic_input_uid"
     private let audioInputUIDKey     = "audio_input_uid"
@@ -497,10 +510,27 @@ final class RadioState {
     private var knsCredentialCache: [String: (username: String, password: String)] = [:]
     private var debouncedCAT: [String: DispatchWorkItem] = [:]
     private var _bandFreqSaveWork: DispatchWorkItem?
+    /// Bands the user has explicitly jumped to this session. Only bands in this
+    /// set will have their frequency saved — prevents connect-time FA responses
+    /// from polluting UserDefaults before the user has done anything.
+    private var _visitedBands: Set<String> = []
+    /// Last frequency commanded by jumpToBand; FA echoes of this value are skipped.
+    private var _lastCommandedHz: Int? = nil
 
     init() {
+        // One-time migration: clear band memory values that were corrupted by the BD0 experiment
+        // (which wrote band-edge values to UserDefaults). Runs once then never again.
+        if !UserDefaults.standard.bool(forKey: "bandMemoryV3Migrated") {
+            for label in ["160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m"] {
+                UserDefaults.standard.removeObject(forKey: "bandFreq_A_\(label)")
+                UserDefaults.standard.removeObject(forKey: "bandFreq_B_\(label)")
+            }
+            UserDefaults.standard.set(true, forKey: "bandMemoryV3Migrated")
+        }
+
         // Build the list of available NR backends.
         var available: [String] = []
+        available.append("HF Spectral NR")
         if RNNoiseProcessor() != nil && WDSPNoiseReductionProcessor(mode: .anr) != nil { available.append("RNNoise + ANR") }
         if RNNoiseProcessor() != nil { available.append("RNNoise (in-process)") }
         if WDSPNoiseReductionProcessor(mode: .anr)  != nil { available.append("WDSP ANR") }
@@ -508,35 +538,13 @@ final class RadioState {
         available.append("Passthrough (disabled)")
         self.availableNoiseReductionBackends = available
 
-        // Pick the best available backend and wire it into the proxy.
-        // Auto-selection order: RNNoise+ANR → RNNoise → WDSP ANR → WDSP EMNR → Passthrough.
-        if let rnnoise = RNNoiseProcessor(), let anr = WDSPNoiseReductionProcessor(mode: .anr) {
-            noiseProcessor = CascadeNoiseReductionProcessor(primary: rnnoise, secondary: anr)
-            isNoiseReductionEnabled = false
-            noiseReductionBackend = "RNNoise + ANR"
-            selectedNoiseReductionBackend = "RNNoise + ANR"
-        } else if let rnnoise = RNNoiseProcessor() {
-            noiseProcessor = rnnoise
-            isNoiseReductionEnabled = false
-            noiseReductionBackend = rnnoise.backendDescription
-            selectedNoiseReductionBackend = "RNNoise (in-process)"
-        } else if let anr = WDSPNoiseReductionProcessor(mode: .anr) {
-            anr.isEnabled = false
-            noiseProcessor = anr
-            isNoiseReductionEnabled = false
-            noiseReductionBackend = "WDSP ANR"
-            selectedNoiseReductionBackend = "WDSP ANR"
-        } else if let emnr = WDSPNoiseReductionProcessor(mode: .emnr) {
-            noiseProcessor = emnr
-            isNoiseReductionEnabled = false
-            noiseReductionBackend = "WDSP EMNR"
-            selectedNoiseReductionBackend = "WDSP EMNR"
-        } else {
-            noiseProcessor = PassthroughNoiseReduction()
-            isNoiseReductionEnabled = false
-            noiseReductionBackend = "Passthrough (disabled)"
-            selectedNoiseReductionBackend = "Passthrough (disabled)"
-        }
+        // Default to HF Spectral NR — always available, no external dependencies.
+        let hfnr = HFNoiseReductionProcessor()
+        hfNRProcessor = hfnr
+        noiseProcessor = hfnr
+        isNoiseReductionEnabled = false
+        noiseReductionBackend = "HF Spectral NR"
+        selectedNoiseReductionBackend = "HF Spectral NR"
         AppFileLogger.shared.log("Noise reduction backend: \(noiseReductionBackend)")
 
         loadPersistedKnsSettings()
@@ -544,8 +552,9 @@ final class RadioState {
         loadPersistedFilterSlotSettings()
         // Apply initial strength to both paths (LAN + monitor).
         setNoiseReductionStrength(noiseReductionStrength, persist: false)
-        // Apply profile after strength so preset can override if user chose it.
-        applyNoiseReductionProfile(persist: false)
+        // Apply profile defaults only if the user has no saved strength — otherwise
+        // their saved value would be silently overwritten every launch.
+        applyNoiseReductionProfile(persist: false, respectSavedStrength: true)
 
         refreshAudioDevices()
         // Restore saved audio input, or fall back to system default.
@@ -726,6 +735,9 @@ final class RadioState {
                     // Keep the UDP receiver alive so port 60001 stays bound.
                     self.isPTTDown = false
                     self.isAppPTTActive = false
+                    // Reset visited-band tracking so the next connect starts clean.
+                    self._visitedBands = []
+                    self._lastCommandedHz = nil
                 }
             }
         }
@@ -972,6 +984,16 @@ final class RadioState {
         // previous state so NR doesn't silently turn off when switching modes.
         let wasEnabled = isNoiseReductionEnabled
         switch backendName {
+        case "HF Spectral NR":
+            let hfnr = HFNoiseReductionProcessor()
+            hfnr.config.aggressiveness  = Float(noiseReductionStrength)
+            hfnr.config.passbandHz      = Float(hfNRPassbandHz)
+            hfnr.config.impulseBlanker  = hfNRImpulseBlanker
+            hfnr.isEnabled = wasEnabled
+            hfNRProcessor  = hfnr
+            noiseProcessor = hfnr
+            noiseReductionBackend = "HF Spectral NR"
+            AppFileLogger.shared.log("NR backend switched to: HF Spectral NR (enabled=\(wasEnabled))")
         case "RNNoise + ANR":
             if let rnnoise = RNNoiseProcessor(), let anr = WDSPNoiseReductionProcessor(mode: .anr) {
                 let cascade = CascadeNoiseReductionProcessor(primary: rnnoise, secondary: anr)
@@ -1278,20 +1300,38 @@ final class RadioState {
         send(KenwoodCAT.setScanType(type))
     }
 
+    /// Switch to a band by label. Restores the last-used frequency from UserDefaults,
+    /// falling back to a common operating frequency on first visit.
+    func jumpToBand(_ label: String) {
+        // Only save current freq if user explicitly visited this band this session.
+        // This prevents connect-time FA responses from being written to UserDefaults.
+        if let hz = vfoAFrequencyHz,
+           let cur = Self._bandRanges.first(where: { $0.1.contains(hz) }),
+           _visitedBands.contains(cur.0) {
+            UserDefaults.standard.set(hz, forKey: "bandFreq_A_\(cur.0)")
+        }
+        guard let entry = Self._bandStepTable.first(where: { $0.label == label }) else { return }
+        let stored = UserDefaults.standard.integer(forKey: "bandFreq_A_\(label)")
+        let target = stored > 0 ? stored : entry.defaultHz
+        _visitedBands.insert(label)
+        _lastCommandedHz = target
+        send(KenwoodCAT.setVFOAFrequencyHz(target))
+    }
+
     // Band table used for step up/down. Matches fpBandRanges in FrontPanelView.
     // UserDefaults keys share the "bandFreq_A_<label>" format used by FrontPanelView.switchBand().
     private static let _bandStepTable: [(label: String, defaultHz: Int, range: ClosedRange<Int>)] = [
-        ("160m",  1_800_000,  1_800_000...2_000_000),
-        ("80m",   3_500_000,  3_500_000...4_000_000),
+        ("160m",  1_900_000,  1_800_000...2_000_000),
+        ("80m",   3_800_000,  3_500_000...4_000_000),
         ("60m",   5_330_500,  5_330_000...5_410_000),
-        ("40m",   7_000_000,  7_000_000...7_300_000),
-        ("30m",  10_100_000, 10_100_000...10_150_000),
-        ("20m",  14_000_000, 14_000_000...14_350_000),
-        ("17m",  18_068_000, 18_068_000...18_168_000),
-        ("15m",  21_000_000, 21_000_000...21_450_000),
-        ("12m",  24_890_000, 24_890_000...24_990_000),
-        ("10m",  28_000_000, 28_000_000...29_700_000),
-        ("6m",   50_000_000, 50_000_000...54_000_000),
+        ("40m",   7_200_000,  7_000_000...7_300_000),
+        ("30m",  10_106_000, 10_100_000...10_150_000),
+        ("20m",  14_225_000, 14_000_000...14_350_000),
+        ("17m",  18_128_000, 18_068_000...18_168_000),
+        ("15m",  21_300_000, 21_000_000...21_450_000),
+        ("12m",  24_940_000, 24_890_000...24_990_000),
+        ("10m",  28_500_000, 28_000_000...29_700_000),
+        ("6m",   50_125_000, 50_000_000...54_000_000),
     ]
 
     func bandStepUp() {
@@ -1313,21 +1353,22 @@ final class RadioState {
         to entry: (label: String, defaultHz: Int, range: ClosedRange<Int>),
         currentHz: Int
     ) {
-        if let cur = Self._bandStepTable.first(where: { $0.range.contains(currentHz) }) {
-            UserDefaults.standard.set(currentHz, forKey: "bandFreq_A_\(cur.label)")
-        }
-        let stored = UserDefaults.standard.integer(forKey: "bandFreq_A_\(entry.label)")
-        let target = stored > 0 ? stored : entry.defaultHz
-        send(KenwoodCAT.setVFOAFrequencyHz(target))
+        jumpToBand(entry.label)
     }
 
     // Called from the FA frame handler. Debounced so rapid VFO tuning doesn't spam
     // UserDefaults — only persists after the frequency has been stable for 1 second.
+    // Ignores FA echoes for frequencies commanded by jumpToBand, and ignores any
+    // band the user hasn't explicitly visited this session (prevents connect-time
+    // FA responses from overwriting the migration's clean state).
     private func _scheduleBandFreqSave(hz: Int) {
+        guard let band = Self._bandRanges.first(where: { $0.1.contains(hz) })?.0 else { return }
+        guard _visitedBands.contains(band) else { return }
+        if hz == _lastCommandedHz { return }
+        _lastCommandedHz = nil
         _bandFreqSaveWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard self != nil else { return }
-            guard let band = Self._bandRanges.first(where: { $0.1.contains(hz) })?.0 else { return }
             UserDefaults.standard.set(hz, forKey: "bandFreq_A_\(band)")
         }
         _bandFreqSaveWork = work
@@ -1916,18 +1957,63 @@ final class RadioState {
     private func setNoiseReductionStrength(_ value: Double, persist: Bool) {
         let clamped = max(0.0, min(1.0, value))
         noiseReductionStrength = clamped
-        // Drive both pipelines from one "strength" knob. Wet/dry mix is a stable,
-        // artifact-safe way to tune aggressiveness without changing the RNNoise model.
+        // For HF Spectral NR, drive the internal aggressiveness parameter directly.
+        // For other backends, wet/dry mix is the only available tuning knob.
+        hfNRProcessor?.config.aggressiveness = Float(clamped)
         setLanAudioWetDry(clamped)
         setAudioMonitorWetDry(clamped)
         if persist { persistNoiseReductionSettings() }
         AppFileLogger.shared.log("NR: strength=\(String(format: "%.2f", clamped)) profile=\(noiseReductionProfileRaw)")
     }
 
-    private func applyNoiseReductionProfile(persist: Bool) {
+    func setHFNRPassbandHz(_ hz: Double) {
+        hfNRPassbandHz = max(300, min(8000, hz))
+        hfNRProcessor?.config.passbandHz = Float(hfNRPassbandHz)
+        AppFileLogger.shared.log("NR: hfPassbandHz=\(Int(hfNRPassbandHz))")
+    }
+
+    func setHFNRAutoPassband(_ enabled: Bool) {
+        hfNRAutoPassband = enabled
+        persistNoiseReductionSettings()
+        if enabled, let mode = operatingMode {
+            autoAdjustHFNRPassband(for: mode)
+        }
+    }
+
+    func setHFNRImpulseBlanker(_ enabled: Bool) {
+        hfNRImpulseBlanker = enabled
+        hfNRProcessor?.config.impulseBlanker = enabled
+        persistNoiseReductionSettings()
+        AppFileLogger.shared.log("NR: impulseBlanker=\(enabled)")
+    }
+
+    /// Returns the recommended NR passband width for a given operating mode.
+    static func hfNRDefaultPassband(for mode: KenwoodCAT.OperatingMode) -> Double {
+        switch mode {
+        case .cw, .cwR:                          return 500
+        case .lsb, .usb, .lsbData, .usbData:     return 2800
+        case .fsk, .fskR, .psk, .pskR:           return 2800
+        case .am, .amData:                        return 6000
+        case .fm, .fmData:                        return 8000
+        }
+    }
+
+    private func autoAdjustHFNRPassband(for mode: KenwoodCAT.OperatingMode) {
+        guard hfNRAutoPassband,
+              selectedNoiseReductionBackend == "HF Spectral NR" else { return }
+        let hz = RadioState.hfNRDefaultPassband(for: mode)
+        hfNRPassbandHz = hz
+        hfNRProcessor?.config.passbandHz = Float(hz)
+        AppFileLogger.shared.log("NR: auto passband \(Int(hz))Hz for mode \(mode)")
+    }
+
+    private func applyNoiseReductionProfile(persist: Bool, respectSavedStrength: Bool = false) {
         let profile = NoiseReductionProfile(rawValue: noiseReductionProfileRaw) ?? .speech
-        // Profile sets a good starting point; user can fine-tune with the strength slider.
-        setNoiseReductionStrength(profile.recommendedStrength, persist: false)
+        // Only apply the profile's recommended strength if the user has no saved value,
+        // or if this is a user-initiated profile change (respectSavedStrength = false).
+        if !respectSavedStrength || UserDefaults.standard.object(forKey: nrStrengthKey) == nil {
+            setNoiseReductionStrength(profile.recommendedStrength, persist: false)
+        }
         if persist { persistNoiseReductionSettings() }
         AppFileLogger.shared.log("NR: profile=\(profile.rawValue) recommendedStrength=\(String(format: "%.2f", profile.recommendedStrength))")
     }
@@ -1948,7 +2034,16 @@ final class RadioState {
            availableNoiseReductionBackends.contains(saved) {
             setNoiseReductionBackend(saved)
         }
-        AppFileLogger.shared.log("Loaded saved NR settings strength=\(String(format: "%.2f", noiseReductionStrength)) profile=\(noiseReductionProfileRaw) backend=\(noiseReductionBackend)")
+        if d.object(forKey: nrPassbandKey) != nil {
+            setHFNRPassbandHz(d.double(forKey: nrPassbandKey))
+        }
+        if d.object(forKey: nrAutoPassbandKey) != nil {
+            hfNRAutoPassband = d.bool(forKey: nrAutoPassbandKey)
+        }
+        if d.object(forKey: nrImpulseBlankerKey) != nil {
+            setHFNRImpulseBlanker(d.bool(forKey: nrImpulseBlankerKey))
+        }
+        AppFileLogger.shared.log("Loaded saved NR settings strength=\(String(format: "%.2f", noiseReductionStrength)) profile=\(noiseReductionProfileRaw) backend=\(noiseReductionBackend) passband=\(Int(hfNRPassbandHz))Hz")
     }
 
     private func persistNoiseReductionSettings() {
@@ -1956,6 +2051,9 @@ final class RadioState {
         d.set(noiseReductionStrength, forKey: nrStrengthKey)
         d.set(noiseReductionProfileRaw, forKey: nrProfileKey)
         d.set(selectedNoiseReductionBackend, forKey: nrBackendKey)
+        d.set(hfNRPassbandHz, forKey: nrPassbandKey)
+        d.set(hfNRAutoPassband, forKey: nrAutoPassbandKey)
+        d.set(hfNRImpulseBlanker, forKey: nrImpulseBlankerKey)
     }
 
     private func loadPersistedFilterSlotSettings() {
@@ -2031,6 +2129,7 @@ final class RadioState {
             if let raw = Int(modeChar, radix: 16), let mode = KenwoodCAT.OperatingMode(rawValue: raw) {
                 let prev = operatingMode
                 operatingMode = mode
+                autoAdjustHFNRPassband(for: mode)
                 // Query APF state when entering CW or CW-R (APF is CW-only hardware).
                 if mode == .cw || mode == .cwR,
                    prev != .cw && prev != .cwR {

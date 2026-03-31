@@ -1242,6 +1242,59 @@ struct AudioSectionView: View {
                 }
             }
 
+            if radio.selectedNoiseReductionBackend == "HF Spectral NR" {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
+                        Text("RX Passband")
+                            .accessibilityLabel("Receive audio passband width")
+                        Slider(value: Binding(
+                            get: { radio.hfNRPassbandHz },
+                            set: { radio.setHFNRPassbandHz($0) }
+                        ), in: 300...8000, step: 100)
+                        .frame(minWidth: 260)
+                        .accessibilityLabel("Receive audio passband width")
+                        .accessibilityValue("\(Int(radio.hfNRPassbandHz)) hertz")
+
+                        Text("\(Int(radio.hfNRPassbandHz)) Hz")
+                            .font(.system(.body, design: .monospaced))
+                            .frame(minWidth: 60, alignment: .trailing)
+                            .accessibilityHidden(true)
+                    }
+
+                    HStack(spacing: 8) {
+                        Text("Presets:")
+                            .foregroundStyle(.secondary)
+                        Button("CW 500") {
+                            radio.setHFNRPassbandHz(500)
+                        }
+                        .accessibilityLabel("Passband preset: CW, 500 hertz")
+                        Button("SSB 2800") {
+                            radio.setHFNRPassbandHz(2800)
+                        }
+                        .accessibilityLabel("Passband preset: SSB, 2800 hertz")
+                        Button("Wide 4000") {
+                            radio.setHFNRPassbandHz(4000)
+                        }
+                        .accessibilityLabel("Passband preset: Wide, 4000 hertz")
+                    }
+                    .buttonStyle(.bordered)
+
+                    Toggle("Auto-adjust passband with mode", isOn: Binding(
+                        get: { radio.hfNRAutoPassband },
+                        set: { radio.setHFNRAutoPassband($0) }
+                    ))
+                    .accessibilityHint("When on, passband automatically changes to 500 Hz for CW, 2800 Hz for SSB, 6000 Hz for AM, and 8000 Hz for FM when you switch modes")
+
+                    Toggle("Impulse Blanker (lightning/QRN)", isOn: Binding(
+                        get: { radio.hfNRImpulseBlanker },
+                        set: { radio.setHFNRImpulseBlanker($0) }
+                    ))
+                    .accessibilityHint("Removes static crashes and impulse noise before spectral processing")
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Receive audio passband controls")
+            }
+
             HStack(spacing: 12) {
                 Text("Backend:")
                     .font(.system(.body, design: .monospaced))

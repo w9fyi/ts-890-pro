@@ -882,7 +882,7 @@ enum KenwoodCAT {
     /// band: 0=1.8 MHz, 1=3.5, 2=7, 3=10, 4=14, 5=18, 6=21, 7=24, 8=28, 9=50, 10=General.
     static func setBand(_ band: Int) -> String {
         let clamped = max(0, min(band, 10))
-        return String(format: "BD0%02d;", clamped)
+        return String(format: "BD0%02d1;", clamped)  // P1=VFO A, P2=band, P3=memory slot 1
     }
 
     /// Read current band for VFO. P1: 0=VFO A, 1=VFO B.

@@ -452,15 +452,7 @@ final class KeyboardShortcutsManager {
         _ entry: (label: String, defaultHz: Int, range: ClosedRange<Int>),
         radio: RadioState
     ) {
-        // Persist current VFO A frequency under the current band key so coming back restores it.
-        // This uses the same UserDefaults key format as FrontPanelView.switchBand() so they share state.
-        if let hz = radio.vfoAFrequencyHz,
-           let cur = Self.bandTable.first(where: { $0.range.contains(hz) }) {
-            UserDefaults.standard.set(hz, forKey: "bandFreq_A_\(cur.label)")
-        }
-        let stored = UserDefaults.standard.integer(forKey: "bandFreq_A_\(entry.label)")
-        let target = stored > 0 ? stored : entry.defaultHz
-        radio.send(KenwoodCAT.setVFOAFrequencyHz(target))
+        radio.jumpToBand(entry.label)
     }
 
     private func sendMacro(_ text: String, radio: RadioState) {

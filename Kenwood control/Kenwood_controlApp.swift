@@ -255,27 +255,33 @@ struct Kenwood_controlApp: App {
                     .keyboardShortcut("m", modifiers: [.command, .option])
             }
             CommandMenu("Band") {
-                Button("160 m") { radio.send("FA00001800000;") }
+                Button("160 m") { radio.jumpToBand("160m") }
                     .keyboardShortcut("1", modifiers: .command)
-                Button("80 m") { radio.send("FA00003500000;") }
+                Button("80 m") { radio.jumpToBand("80m") }
                     .keyboardShortcut("2", modifiers: .command)
-                Button("60 m") { radio.send("FA00005330500;") }
-                Button("40 m") { radio.send("FA00007000000;") }
+                Button("60 m") { radio.jumpToBand("60m") }
+                Button("40 m") { radio.jumpToBand("40m") }
                     .keyboardShortcut("3", modifiers: .command)
-                Button("30 m") { radio.send("FA00010100000;") }
+                Button("30 m") { radio.jumpToBand("30m") }
                     .keyboardShortcut("4", modifiers: .command)
-                Button("20 m") { radio.send("FA00014000000;") }
+                Button("20 m") { radio.jumpToBand("20m") }
                     .keyboardShortcut("5", modifiers: .command)
-                Button("17 m") { radio.send("FA00018068000;") }
+                Button("17 m") { radio.jumpToBand("17m") }
                     .keyboardShortcut("6", modifiers: .command)
-                Button("15 m") { radio.send("FA00021000000;") }
+                Button("15 m") { radio.jumpToBand("15m") }
                     .keyboardShortcut("7", modifiers: .command)
-                Button("12 m") { radio.send("FA00024890000;") }
+                Button("12 m") { radio.jumpToBand("12m") }
                     .keyboardShortcut("8", modifiers: .command)
-                Button("10 m") { radio.send("FA00028000000;") }
+                Button("10 m") { radio.jumpToBand("10m") }
                     .keyboardShortcut("9", modifiers: .command)
-                Button("6 m") { radio.send("FA00050000000;") }
+                Button("6 m") { radio.jumpToBand("6m") }
                     .keyboardShortcut("0", modifiers: .command)
+            }
+            CommandGroup(replacing: .help) {
+                Button("User Manual") {
+                    openWindow(id: "userManual")
+                }
+                .keyboardShortcut("?", modifiers: .command)
             }
         }
         Settings {
@@ -292,6 +298,9 @@ struct Kenwood_controlApp: App {
         }
         WindowGroup("Menu Access", id: "menuAccess") {
             RadioMenuView(radio: radio)
+        }
+        WindowGroup("User Manual", id: "userManual") {
+            UserManualView()
         }
     }
 }

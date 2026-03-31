@@ -923,10 +923,15 @@ final class FT8ViewModel {
         guard isAutoDecodeEnabled else { return }
         let slotDur = selectedProtocol.slotDuration
 
-        // Next slot boundary + 0.6 s to ensure the slot is fully buffered.
+        // Fire 0.5 s BEFORE the slot boundary so the decode and commitAutoSeq
+        // complete before the CQ tick fires at boundary+1.0 s.
+        // FT8 transmissions end ~2.4 s before the boundary, so no audio is lost.
+        // If boundary-0.5 has already passed (e.g. we just fired at that moment),
+        // advance to the next boundary to prevent a 100 ms runaway loop.
         let nowTS  = Date().timeIntervalSince1970
-        let nextTS = (floor(nowTS / slotDur) + 1.0) * slotDur
-        let fireAt = Date(timeIntervalSince1970: nextTS + 0.6)
+        var nextTS = (floor(nowTS / slotDur) + 1.0) * slotDur
+        if nextTS - 0.5 <= nowTS { nextTS += slotDur }
+        let fireAt = Date(timeIntervalSince1970: nextTS - 0.5)
 
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -1603,7 +1608,12 @@ struct FT8SectionView: View {
         // Capture the current generation so orphaned chains from a previous
         // start/stop cycle discard themselves rather than double-firing.
         let generation = vm.cqTickGeneration
-        let dt = max(0.01, next.timeIntervalSinceNow)
+        // Fire 1.0 s after the slot boundary.  The auto-decode tick fires 0.5 s
+        // BEFORE the boundary and the FT8 decode completes in < 1 s on modern Macs,
+        // so commitAutoSeq has time to set queuedTarget before this tick fires.
+        // TX therefore starts at boundary+1.0 s and ends at +13.64 s, leaving
+        // 1.36 s of margin before the next boundary — well within FT8 tolerance.
+        let dt = max(0.01, next.timeIntervalSinceNow + 1.0)
         DispatchQueue.main.asyncAfter(deadline: .now() + dt) {
             guard vm.isCQRunning, vm.cqTickGeneration == generation else { return }
             cqTick(at: next)

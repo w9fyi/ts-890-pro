@@ -689,7 +689,7 @@ final class RadioState {
                         // and switch TX audio to LAN VoIP so voice/digital ops work immediately.
                         if self.isConfiguredForDigitalMode {
                             let revertMode = self.previousOperatingModeForDigital ?? .usb
-                            self.send(KenwoodCAT.setOperatingMode(revertMode))
+                            self.setOperatingMode(revertMode)
                             self.send("MS003;") // SEND/PTT, Front=OFF, Rear=LAN
                             self.isConfiguredForDigitalMode = false
                             self.previousOperatingModeForDigital = nil
@@ -713,8 +713,9 @@ final class RadioState {
                     }
                     // Enable Auto-Information mode: radio pushes FA/FB/OM/RIT/XIT/etc.
                     // changes unsolicited, eliminating the need to poll those values.
-                    // AI4 = auto-info ON with backup (survives KNS reconnects).
-                    self.send("AI4;")
+                    // TS-890S/990S: AI4 (backed up, survives reconnects).
+                    // TS-590S/SG: AI2 (non-persistent; AI4 not supported).
+                    self.send(self.capabilities.aiCommand)
                     // Prime basic audio/rf controls and common operating params.
                     self.send(KenwoodCAT.getAFGain())
                     self.send(KenwoodCAT.getRFGain())
@@ -1115,8 +1116,16 @@ final class RadioState {
         // Memory mode/channel are useful for quick operation.
         send(KenwoodCAT.getMemoryMode())
         send(KenwoodCAT.getMemoryChannelNumber())
-        // Mode, squelch, NR, notch — not pushed by AI mode.
-        send(KenwoodCAT.getOperatingMode(.left))
+        // Mode: OM for TS-890S/990S, MD for TS-590S/SG.
+        if capabilities.useOMCommand {
+            send(KenwoodCAT.getOperatingMode(.left))
+        } else {
+            send(KenwoodCAT.getModeMD())
+            // TS-590: also query data mode overlay state
+            if capabilities.hasDataModeCommand {
+                send(KenwoodCAT.getDataMode())
+            }
+        }
         send(KenwoodCAT.getSquelchLevel())
         send(KenwoodCAT.getNoiseReduction())
         send(KenwoodCAT.getNotch())
@@ -1137,25 +1146,35 @@ final class RadioState {
         send(KenwoodCAT.getMute())
         send(KenwoodCAT.getSpeakerMute())
         send(KenwoodCAT.getFirmwareVersion())
-        send(KenwoodCAT.getTXMonitor())
-        send(KenwoodCAT.getRXMonitor())
-        send(KenwoodCAT.getDSPMonitor())
+        // Monitor commands: TS-890S/990S only (MO0/MO1/MO2).
+        if capabilities.hasMonitorCommands {
+            send(KenwoodCAT.getTXMonitor())
+            send(KenwoodCAT.getRXMonitor())
+            send(KenwoodCAT.getDSPMonitor())
+        }
+        // CW extended: common to all models.
         send(KenwoodCAT.getCWAutotune())
         send(KenwoodCAT.getCWPitch())
         send(KenwoodCAT.getCWBreakInDelay())
-        send(KenwoodCAT.getNoiseBlanker2())
-        send(KenwoodCAT.getNoiseBlanker1Level())
-        send(KenwoodCAT.getNoiseBlanker2Level())
-        send(KenwoodCAT.getNoiseBlanker2Type())
-        send(KenwoodCAT.getNoiseBlanker2Depth())
-        send(KenwoodCAT.getNoiseBlanker2Width())
+        // Dual noise blanker: NB2/NBT/NBD/NBW/NL1/NL2 — TS-890S/990S only.
+        if capabilities.hasDualNoiseBlanker {
+            send(KenwoodCAT.getNoiseBlanker2())
+            send(KenwoodCAT.getNoiseBlanker1Level())
+            send(KenwoodCAT.getNoiseBlanker2Level())
+            send(KenwoodCAT.getNoiseBlanker2Type())
+            send(KenwoodCAT.getNoiseBlanker2Depth())
+            send(KenwoodCAT.getNoiseBlanker2Width())
+        }
         send(KenwoodCAT.getNotchFrequency())
         send(KenwoodCAT.getNotchBandwidth())
         send(KenwoodCAT.getNRLevel())
         send(KenwoodCAT.getNR2TimeConstant())
         send(KenwoodCAT.getDataVOX())
-        send(KenwoodCAT.getTxAudioSource(txMeans: 0))  // PTT keying config
-        send(KenwoodCAT.getTxAudioSource(txMeans: 1))  // DATA SEND keying config
+        // TX audio source selection — TS-890S/990S only.
+        if capabilities.hasAudioSourceSelect {
+            send(KenwoodCAT.getTxAudioSource(txMeans: 0))  // PTT keying config
+            send(KenwoodCAT.getTxAudioSource(txMeans: 1))  // DATA SEND keying config
+        }
         send(KenwoodCAT.getVOXDelay(inputType: 0))
         send(KenwoodCAT.getVOXGain(inputType: 0))
         send(KenwoodCAT.getAntiVOXLevel(inputType: 0))
@@ -1593,7 +1612,7 @@ final class RadioState {
     /// Sends the previous OM mode + MS010 (SEND/PTT, Front=Microphone, Rear=OFF).
     func revertFromDigitalMode() {
         let revertMode = previousOperatingModeForDigital ?? .usb
-        send(KenwoodCAT.setOperatingMode(revertMode))
+        setOperatingMode(revertMode)
         send("MS010;")  // SEND/PTT (P1=0), Front=Microphone (P2=1), Rear=OFF (P3=0)
         isConfiguredForDigitalMode = false
         previousOperatingModeForDigital = nil
@@ -1735,7 +1754,7 @@ final class RadioState {
 
         // Restore previous radio mode and TX audio source.
         let revertMode = previousModeBeforeFreeDV ?? .usb
-        send(KenwoodCAT.setOperatingMode(revertMode))
+        setOperatingMode(revertMode)
         setTXAudioSource(previousTxAudioSourceBeforeFreeDV ?? .hardware)
         previousModeBeforeFreeDV = nil
         previousTxAudioSourceBeforeFreeDV = nil
@@ -2158,7 +2177,24 @@ final class RadioState {
 
         if core.hasPrefix("MD") {
             let digits = core.dropFirst(2).prefix { $0.isNumber }
-            if let v = Int(digits) { mdMode = v }
+            if let v = Int(digits) {
+                mdMode = v
+                // On TS-590S/SG (useOMCommand=false), MD IS the mode command.
+                // Map MD values to OperatingMode and update operatingMode directly.
+                if !capabilities.useOMCommand,
+                   let mode = KenwoodCAT.OperatingMode(rawValue: v) {
+                    let prev = operatingMode
+                    operatingMode = mode
+                    autoAdjustHFNRPassband(for: mode)
+                    if (mode == .cw || mode == .cwR) && capabilities.hasAPFCommands,
+                       prev != .cw && prev != .cwR {
+                        send(KenwoodCAT.getAPFEnabled())
+                        send(KenwoodCAT.getAPFShift())
+                        send(KenwoodCAT.getAPFBandwidth())
+                        send(KenwoodCAT.getAPFGain())
+                    }
+                }
+            }
             return
         }
 
@@ -2630,25 +2666,43 @@ final class RadioState {
             return
         }
 
-        if core.hasPrefix("EX"), core.count >= 9 {
-            // Format: EX + P1(1) + P2(2) + P3(2) + P4(space) + P5(1+)
-            // e.g. "EX00030 005" = P1=0, P2=00, P3=30, value=5
-            // menuNumber key: P1=0 → P2*100+P3;  P1=1 → 10000+P3
+        if core.hasPrefix("EX"), core.count >= 7 {
+            // Two EX response formats:
+            // TS-890S/990S: EX + P1(1) + P2(2) + P3(2) + space + value
+            //   e.g. "EX00030 005" → menuNum = P2*100+P3 = 30, value = 5
+            //   P1=1 (advanced): menuNum = 10000+P3
+            // TS-590S/SG:   EX + NNN + space + value
+            //   e.g. "EX053 004" → menuNum = 53, value = 4
             let afterEX = core.dropFirst(2)
-            guard afterEX.count >= 6,
-                  let p1 = Int(afterEX.prefix(1)),
-                  let p2 = Int(afterEX.dropFirst(1).prefix(2)),
-                  let p3 = Int(afterEX.dropFirst(3).prefix(2)) else { return }
-            let menuNum = p1 == 0 ? p2 * 100 + p3 : 10000 + p3
-            let afterParams = afterEX.dropFirst(5)  // starts at P4
-            let rawValue = afterParams.first == " " ? afterParams.dropFirst() : Substring(afterParams)
-            let value: Int
-            if rawValue.hasPrefix("+") {
-                value = Int(rawValue.dropFirst()) ?? 0
-            } else if rawValue.hasPrefix("-") {
-                value = -(Int(rawValue.dropFirst()) ?? 0)
+
+            let menuNum: Int
+            let valueStr: Substring
+
+            if capabilities.exMenuFormat == .ts590 {
+                // TS-590: 3-digit flat number
+                guard afterEX.count >= 4,
+                      let n = Int(afterEX.prefix(3)) else { return }
+                menuNum = n
+                let afterNum = afterEX.dropFirst(3)
+                valueStr = afterNum.first == " " ? afterNum.dropFirst() : Substring(afterNum)
             } else {
-                value = Int(rawValue) ?? 0
+                // TS-890/990: P1(1)+P2(2)+P3(2) = 5 digits
+                guard afterEX.count >= 6,
+                      let p1 = Int(afterEX.prefix(1)),
+                      let p2 = Int(afterEX.dropFirst(1).prefix(2)),
+                      let p3 = Int(afterEX.dropFirst(3).prefix(2)) else { return }
+                menuNum = p1 == 0 ? p2 * 100 + p3 : 10000 + p3
+                let afterParams = afterEX.dropFirst(5)
+                valueStr = afterParams.first == " " ? afterParams.dropFirst() : Substring(afterParams)
+            }
+
+            let value: Int
+            if valueStr.hasPrefix("+") {
+                value = Int(valueStr.dropFirst()) ?? 0
+            } else if valueStr.hasPrefix("-") {
+                value = -(Int(valueStr.dropFirst()) ?? 0)
+            } else {
+                value = Int(valueStr) ?? 0
             }
             // Store in general map (used by RadioMenuView)
             exMenuValues[menuNum] = value
@@ -3817,8 +3871,7 @@ final class RadioState {
         guard let mode = operatingMode, mode == .lsb || mode == .usb else { return }
         let target: KenwoodCAT.OperatingMode = Self._lsbBands.contains(newBand) ? .lsb : .usb
         guard mode != target else { return }
-        send(KenwoodCAT.setOperatingMode(target))
-        send(KenwoodCAT.getOperatingMode())
+        setOperatingMode(target)
     }
 
     // MARK: - EQ commands
@@ -3852,22 +3905,62 @@ final class RadioState {
         send(KenwoodCAT.getRXEQ())
     }
 
+    // MARK: - Model-aware mode setting
+
+    /// Set the operating mode using the correct command for the connected radio.
+    /// TS-890S/990S: OM command. TS-590S/SG: MD command.
+    /// Also queries the mode back to confirm.
+    func setOperatingMode(_ mode: KenwoodCAT.OperatingMode) {
+        if capabilities.useOMCommand {
+            send(KenwoodCAT.setOperatingMode(mode))
+            send(KenwoodCAT.getOperatingMode())
+        } else {
+            // TS-590: MD command uses the mode raw value directly (1–9).
+            // Data modes (12–15) aren't available via MD; use DA command overlay.
+            let mdValue: Int
+            switch mode {
+            case .lsbData: mdValue = KenwoodCAT.OperatingMode.lsb.rawValue
+            case .usbData: mdValue = KenwoodCAT.OperatingMode.usb.rawValue
+            case .fmData:  mdValue = KenwoodCAT.OperatingMode.fm.rawValue
+            case .amData:  mdValue = KenwoodCAT.OperatingMode.am.rawValue
+            default:       mdValue = mode.rawValue
+            }
+            send(KenwoodCAT.setModeMD(mdValue))
+            // Enable/disable data mode overlay for data modes
+            if capabilities.hasDataModeCommand {
+                let needsData = [.lsbData, .usbData, .fmData, .amData].contains(mode)
+                send(KenwoodCAT.setDataMode(enabled: needsData))
+            }
+            send(KenwoodCAT.getModeMD())
+        }
+    }
+
+    /// Query the current operating mode using the correct command for the connected radio.
+    func queryOperatingMode() {
+        if capabilities.useOMCommand {
+            send(KenwoodCAT.getOperatingMode())
+        } else {
+            send(KenwoodCAT.getModeMD())
+        }
+    }
+
     // MARK: - General EX menu read/write
 
     func readMenuValue(_ menuNumber: Int) {
-        send(KenwoodCAT.getMenuValue(menuNumber))
+        send(KenwoodMenuDefinitions.getMenuCommand(for: radioModel, menuNumber: menuNumber))
     }
 
     func writeMenuValue(_ menuNumber: Int, value: Int) {
-        send(KenwoodCAT.setMenuValue(menuNumber, value: value))
-        send(KenwoodCAT.getMenuValue(menuNumber))
+        send(KenwoodMenuDefinitions.setMenuCommand(for: radioModel, menuNumber: menuNumber, value: value))
+        send(KenwoodMenuDefinitions.getMenuCommand(for: radioModel, menuNumber: menuNumber))
     }
 
     // MARK: - EX menu discovery scan
 
     /// Queries all valid EX menu items using the correct 5-digit P1/P2/P3 format.
-    /// Scans P1=0 (regular menu) categories 00–19, items 00–99, plus
-    /// P1=1 (Advanced Menu) items 00–27.  Total ≈ 2028 queries at 20 ms each (~41 s).
+    /// Scans EX menu items for the connected radio model.
+    /// TS-890S/990S: P1=0 categories 00–29, items 00–99, plus P1=1 (Advanced) items 00–27.
+    /// TS-590S/SG: flat items 000–087.
     /// The radio silently ignores (returns ?;) queries for non-existent items;
     /// only valid responses are stored.
     func startMenuDiscovery() {
@@ -3882,24 +3975,32 @@ final class RadioState {
         menuDiscoverySentCount = 0
         exMenuValues.removeAll()
 
-        // Silence AI4 push traffic during the scan so EX responses aren't
+        // Silence AI push traffic during the scan so EX responses aren't
         // buried in FA/FB floods and the main thread stays responsive.
         send("AI0;")
         // Stop bandscope streaming (DD01 runs at ~30 Hz on LAN and isn't
         // silenced by AI0 — it would drown out EX responses).
-        if connectionType == .lan { send("DD00;") }
+        if connectionType == .lan && capabilities.hasScope { send("DD00;") }
 
-        // Build the ordered list of queries using the correct 5-digit format.
-        // Scan P2=00-29 to cover all known regular menu categories including
-        // any undocumented items well beyond the confirmed P2=00-09 range.
+        // Build the ordered list of queries using the correct format for this radio.
         var queries: [String] = []
-        for p2 in 0...29 {
-            for p3 in 0...99 {
-                queries.append(String(format: "EX0%02d%02d;", p2, p3))
+        switch capabilities.exMenuFormat {
+        case .ts590:
+            // TS-590S/SG: flat EX000–EX087
+            for n in 0...87 {
+                queries.append(String(format: "EX%03d;", n))
             }
-        }
-        for p3 in 0...27 {
-            queries.append(String(format: "EX100%02d;", p3))
+        case .ts890, .ts990:
+            // TS-890S/990S: P1=0 categories P2=00–29, items P3=00–99
+            for p2 in 0...29 {
+                for p3 in 0...99 {
+                    queries.append(String(format: "EX0%02d%02d;", p2, p3))
+                }
+            }
+            // P1=1 (Advanced) items 00–27
+            for p3 in 0...27 {
+                queries.append(String(format: "EX100%02d;", p3))
+            }
         }
 
         var index = 0
@@ -3929,9 +4030,9 @@ final class RadioState {
                         .map { (number: $0.key, value: $0.value) }
                     self.menuDiscoveryRunning = false
                     self.menuDiscoveryProgress = 1.0
-                    // Restore AI4 push traffic and bandscope streaming.
-                    self.send("AI4;")
-                    if self.connectionType == .lan { self.send("DD01;") }
+                    // Restore AI push traffic and bandscope streaming.
+                    self.send(self.capabilities.aiCommand)
+                    if self.connectionType == .lan && self.capabilities.hasScope { self.send("DD01;") }
                 }
             }
         }
@@ -3942,9 +4043,9 @@ final class RadioState {
         _discoverySource?.cancel()
         _discoverySource = nil
         menuDiscoveryRunning = false
-        // Restore AI4 push traffic and bandscope streaming.
-        send("AI4;")
-        if connectionType == .lan { send("DD01;") }
+        // Restore AI push traffic and bandscope streaming.
+        send(capabilities.aiCommand)
+        if connectionType == .lan && capabilities.hasScope { send("DD01;") }
     }
 
     private func startMicCapture() {

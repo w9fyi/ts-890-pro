@@ -248,6 +248,72 @@ final class KenwoodCapabilitiesTests: XCTestCase {
         XCTAssertFalse(caps(.ts590sg).useOMCommand)
     }
 
+    // MARK: - New multi-radio capability flags
+
+    func testKNS_onlyTS890S() {
+        XCTAssertTrue(caps(.ts890s).hasKNS)
+        XCTAssertFalse(caps(.ts990s).hasKNS, "TS-990S has proprietary LAN, not KNS")
+        XCTAssertFalse(caps(.ts590sg).hasKNS)
+        XCTAssertFalse(caps(.ts590s).hasKNS)
+    }
+
+    func testAICommand_ts890s_ai4() {
+        XCTAssertEqual(caps(.ts890s).aiCommand, "AI4;")
+    }
+
+    func testAICommand_ts990s_ai4() {
+        XCTAssertEqual(caps(.ts990s).aiCommand, "AI4;")
+    }
+
+    func testAICommand_ts590sg_ai2() {
+        XCTAssertEqual(caps(.ts590sg).aiCommand, "AI2;",
+            "TS-590SG does not support AI4 — must use AI2")
+    }
+
+    func testAICommand_ts590s_ai2() {
+        XCTAssertEqual(caps(.ts590s).aiCommand, "AI2;")
+    }
+
+    func testDualNoiseBlanker_advancedRadios() {
+        XCTAssertTrue(caps(.ts890s).hasDualNoiseBlanker)
+        XCTAssertTrue(caps(.ts990s).hasDualNoiseBlanker)
+        XCTAssertFalse(caps(.ts590sg).hasDualNoiseBlanker, "TS-590SG has simple NB only")
+        XCTAssertFalse(caps(.ts590s).hasDualNoiseBlanker)
+    }
+
+    func testEXMenuFormat_perModel() {
+        XCTAssertEqual(caps(.ts890s).exMenuFormat, .ts890)
+        XCTAssertEqual(caps(.ts990s).exMenuFormat, .ts990)
+        XCTAssertEqual(caps(.ts590sg).exMenuFormat, .ts590)
+        XCTAssertEqual(caps(.ts590s).exMenuFormat, .ts590)
+    }
+
+    func testAPFCommands_ts890sOnly() {
+        XCTAssertTrue(caps(.ts890s).hasAPFCommands)
+        XCTAssertFalse(caps(.ts990s).hasAPFCommands)
+        XCTAssertFalse(caps(.ts590sg).hasAPFCommands)
+    }
+
+    func testDataModeCommand_ts590Only() {
+        XCTAssertFalse(caps(.ts890s).hasDataModeCommand, "TS-890S uses OM with data mode codes")
+        XCTAssertTrue(caps(.ts590sg).hasDataModeCommand, "TS-590SG uses DA for data mode overlay")
+        XCTAssertTrue(caps(.ts590s).hasDataModeCommand)
+    }
+
+    func testMonitorCommands_advancedRadios() {
+        XCTAssertTrue(caps(.ts890s).hasMonitorCommands)
+        XCTAssertTrue(caps(.ts990s).hasMonitorCommands)
+        XCTAssertFalse(caps(.ts590sg).hasMonitorCommands)
+        XCTAssertFalse(caps(.ts590s).hasMonitorCommands)
+    }
+
+    func testMaxTXPower_perModel() {
+        XCTAssertEqual(caps(.ts890s).maxTXPowerWatts, 100)
+        XCTAssertEqual(caps(.ts990s).maxTXPowerWatts, 200)
+        XCTAssertEqual(caps(.ts590sg).maxTXPowerWatts, 100)
+        XCTAssertEqual(caps(.ts590s).maxTXPowerWatts, 100)
+    }
+
     // MARK: - Model stored in capabilities struct
 
     func testCapabilities_modelPropertyMatchesInput() {

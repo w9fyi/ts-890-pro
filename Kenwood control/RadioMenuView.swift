@@ -2,7 +2,8 @@
 //  RadioMenuView.swift
 //  Kenwood control
 //
-//  EX extended menu browser for TS-890S.
+//  EX extended menu browser — supports TS-890S, TS-590S/SG, and TS-990S.
+//  Uses KenwoodMenuDefinitions factory for per-radio menu items.
 //  Full menu list with group-by-section disclosure groups, plus
 //  a discovery scan and freeform custom entry.
 //
@@ -29,10 +30,15 @@ struct RadioMenuView: View {
     @State private var customMenuNumber: String = ""
     @State private var customMenuValue: String = ""
 
-    private var filteredFullMenuItems: [TS890MenuItem] {
-        if fullSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return ts890MenuItems }
+    private var menuItems: [KenwoodMenuItem] {
+        KenwoodMenuDefinitions.menuItems(for: radio.radioModel)
+    }
+
+    private var filteredFullMenuItems: [KenwoodMenuItem] {
+        let items = menuItems
+        if fullSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return items }
         let lower = fullSearchText.lowercased()
-        return ts890MenuItems.filter {
+        return items.filter {
             $0.displayLabel.lowercased().contains(lower) ||
             $0.detail.lowercased().contains(lower) ||
             String($0.number).contains(lower) ||
@@ -46,7 +52,7 @@ struct RadioMenuView: View {
                 Text("Menu Access (EX)")
                     .font(.title2)
 
-                Text("Read and write TS-890S extended menu (EX) settings. Values are saved to the radio immediately when you press Write. Query first to see the current value.")
+                Text("Read and write extended menu (EX) settings for your \(radio.radioModel.description). Values are saved to the radio immediately when you press Write. Query first to see the current value.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -120,16 +126,12 @@ struct RadioMenuView: View {
                                 if !radio.menuDiscoverySnapshot.isEmpty && !radio.menuDiscoveryRunning {
                                     Button("Copy Results") {
                                         let lookup: [Int: String] = Dictionary(
-                                            ts890MenuItems.map { ($0.number, $0.displayLabel) },
+                                            menuItems.map { ($0.number, $0.displayLabel) },
                                             uniquingKeysWith: { f, _ in f }
                                         )
                                         let lines = radio.menuDiscoverySnapshot.map { item in
-                                            let exCmd: String
-                                            if item.number >= 10000 {
-                                                exCmd = String(format: "EX100%02d", item.number - 10000)
-                                            } else {
-                                                exCmd = String(format: "EX0%02d%02d", item.number / 100, item.number % 100)
-                                            }
+                                            let exCmd = KenwoodMenuDefinitions.getMenuCommand(for: radio.radioModel, menuNumber: item.number)
+                                                .replacingOccurrences(of: ";", with: "")
                                             let label = lookup[item.number].map { "  [\($0)]" } ?? ""
                                             return "\(exCmd) \(String(format: "%03d", item.value))\(label)"
                                         }.joined(separator: "\n")
@@ -161,7 +163,7 @@ struct RadioMenuView: View {
 
                             if !radio.menuDiscoverySnapshot.isEmpty {
                                 let lookup: [Int: String] = Dictionary(
-                                    ts890MenuItems.map { ($0.number, $0.displayLabel) },
+                                    menuItems.map { ($0.number, $0.displayLabel) },
                                     uniquingKeysWith: { f, _ in f }
                                 )
 
@@ -173,9 +175,8 @@ struct RadioMenuView: View {
 
                                 ForEach(radio.menuDiscoverySnapshot, id: \.number) { item in
                                     HStack(spacing: 12) {
-                                        let exCmd: String = item.number >= 10000
-                                            ? String(format: "EX100%02d", item.number - 10000)
-                                            : String(format: "EX0%02d%02d", item.number / 100, item.number % 100)
+                                        let exCmd = KenwoodMenuDefinitions.getMenuCommand(for: radio.radioModel, menuNumber: item.number)
+                                            .replacingOccurrences(of: ";", with: "")
                                         Text(exCmd)
                                             .font(.system(.caption, design: .monospaced))
                                             .foregroundStyle(.secondary)
@@ -267,7 +268,7 @@ struct RadioMenuView: View {
 }
 
 private struct FullMenuItemRow: View {
-    let item: TS890MenuItem
+    let item: KenwoodMenuItem
     var radio: RadioState
     @Binding var writeValues: [Int: String]
 

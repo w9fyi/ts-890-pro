@@ -20,6 +20,13 @@ struct ConnectionProfile: Identifiable, Codable {
     var accountType: String   // KenwoodKNS.AccountType raw value
     var adminId: String
     // Password is stored in Keychain; only the admin ID is serialised here.
+
+    /// Hint for the expected radio model. Auto-detected on connect via ID; command,
+    /// but storing a hint lets the UI show the correct icon/label before connecting.
+    var radioModelHint: String = KenwoodRadioModel.unknown.rawValue
+
+    /// Preferred connection type. Profiles with .usb store the serial port path in `host`.
+    var connectionType: ConnectionType = .lan
 }
 
 // MARK: - Store
@@ -123,11 +130,13 @@ struct ConnectionProfilesView: View {
     private func currentConnectionAsProfile() -> ConnectionProfile {
         ConnectionProfile(
             name: "My Radio",
-            host: KNSSettings.loadLastHost() ?? "",
+            host: radio.connectionType == .usb ? radio.selectedSerialPort : (KNSSettings.loadLastHost() ?? ""),
             port: KNSSettings.loadLastPort() ?? 60000,
             useKNS: radio.useKnsLogin,
             accountType: radio.knsAccountType,
-            adminId: radio.adminId
+            adminId: radio.adminId,
+            radioModelHint: radio.radioModel.rawValue,
+            connectionType: radio.connectionType
         )
     }
 
@@ -136,15 +145,20 @@ struct ConnectionProfilesView: View {
         radio.knsAccountType = profile.accountType
         radio.adminId = profile.adminId
         // Load Keychain password for this host + account type + ID
-        if let pw = KNSSettings.loadPassword(
-            host: profile.host,
-            accountTypeRaw: profile.accountType,
-            username: profile.adminId
-        ) {
-            radio.adminPassword = pw
+        if profile.connectionType == .lan {
+            if let pw = KNSSettings.loadPassword(
+                host: profile.host,
+                accountTypeRaw: profile.accountType,
+                username: profile.adminId
+            ) {
+                radio.adminPassword = pw
+            }
+            radio.connect(host: profile.host, port: profile.port)
+        } else {
+            // USB serial connection — host field stores the serial port path
+            radio.connectUSB(portPath: profile.host)
         }
-        radio.connect(host: profile.host, port: profile.port)
-        AppFileLogger.shared.log("Profiles: connected via profile '\(profile.name)' host=\(profile.host)")
+        AppFileLogger.shared.log("Profiles: connected via profile '\(profile.name)' type=\(profile.connectionType.rawValue) host=\(profile.host)")
     }
 }
 
@@ -160,13 +174,15 @@ private struct ProfileRowView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(profile.name)
                     .fontWeight(.medium)
-                Text("\(profile.host):\(profile.port)  •  \(profile.useKNS ? "KNS" : "Direct")  •  \(profile.adminId)")
+                let modelName = KenwoodRadioModel(rawValue: profile.radioModelHint)?.description ?? "Unknown"
+                let connLabel = profile.connectionType == .usb ? "USB" : (profile.useKNS ? "KNS" : "Direct LAN")
+                Text("\(profile.connectionType == .usb ? profile.host : "\(profile.host):\(profile.port)")  •  \(connLabel)  •  \(modelName)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(profile.name), \(profile.host) port \(profile.port), \(profile.useKNS ? "KNS login" : "direct"), account \(profile.adminId)")
+            .accessibilityLabel("\(profile.name), \(profile.connectionType == .usb ? "USB \(profile.host)" : "\(profile.host) port \(profile.port)"), \(profile.connectionType == .usb ? "USB" : (profile.useKNS ? "KNS login" : "direct LAN")), \(KenwoodRadioModel(rawValue: profile.radioModelHint)?.description ?? "unknown radio")")
 
             Button("Edit") { onEdit() }
             Button("Connect") { onConnect() }
@@ -198,24 +214,45 @@ private struct ProfileEditorSheet: View {
                 labeled("Profile Name:") {
                     TextField("e.g. Home Radio", text: $profile.name)
                 }
-                labeled("Host / IP:") {
-                    TextField("192.168.1.x", text: $profile.host)
-                }
-                labeled("Port:") {
-                    TextField("60000", text: $portString)
-                        .frame(width: 100)
-                }
-                Toggle("Use KNS Login", isOn: $profile.useKNS)
-                Picker("Account Type", selection: $profile.accountType) {
-                    Text("Admin").tag(KenwoodKNS.AccountType.administrator.rawValue)
-                    Text("User").tag(KenwoodKNS.AccountType.user.rawValue)
+
+                Picker("Connection Type", selection: $profile.connectionType) {
+                    Text("LAN").tag(ConnectionType.lan)
+                    Text("USB Serial").tag(ConnectionType.usb)
                 }
                 .pickerStyle(.segmented)
-                labeled("Admin ID:") {
-                    TextField("Admin ID", text: $profile.adminId)
+
+                Picker("Radio Model", selection: $profile.radioModelHint) {
+                    Text("Auto-detect").tag(KenwoodRadioModel.unknown.rawValue)
+                    Text("TS-890S").tag(KenwoodRadioModel.ts890s.rawValue)
+                    Text("TS-990S").tag(KenwoodRadioModel.ts990s.rawValue)
+                    Text("TS-590SG").tag(KenwoodRadioModel.ts590sg.rawValue)
+                    Text("TS-590S").tag(KenwoodRadioModel.ts590s.rawValue)
                 }
-                labeled("Password:") {
-                    SecureField("Password (stored in Keychain)", text: $password)
+
+                if profile.connectionType == .usb {
+                    labeled("Serial Port:") {
+                        TextField("/dev/cu.SLAB_USBtoUART", text: $profile.host)
+                    }
+                } else {
+                    labeled("Host / IP:") {
+                        TextField("192.168.1.x", text: $profile.host)
+                    }
+                    labeled("Port:") {
+                        TextField("60000", text: $portString)
+                            .frame(width: 100)
+                    }
+                    Toggle("Use KNS Login", isOn: $profile.useKNS)
+                    Picker("Account Type", selection: $profile.accountType) {
+                        Text("Admin").tag(KenwoodKNS.AccountType.administrator.rawValue)
+                        Text("User").tag(KenwoodKNS.AccountType.user.rawValue)
+                    }
+                    .pickerStyle(.segmented)
+                    labeled("Admin ID:") {
+                        TextField("Admin ID", text: $profile.adminId)
+                    }
+                    labeled("Password:") {
+                        SecureField("Password (stored in Keychain)", text: $password)
+                    }
                 }
             }
 
@@ -226,8 +263,9 @@ private struct ProfileEditorSheet: View {
             HStack(spacing: 12) {
                 Button("Save") {
                     profile.port = Int(portString) ?? 60000
-                    // Save password to Keychain if provided
-                    if !password.isEmpty, !profile.adminId.isEmpty, !profile.host.isEmpty {
+                    // Save password to Keychain if provided (LAN profiles only)
+                    if profile.connectionType == .lan,
+                       !password.isEmpty, !profile.adminId.isEmpty, !profile.host.isEmpty {
                         KNSSettings.saveUsername(profile.adminId, host: profile.host, accountTypeRaw: profile.accountType)
                         KNSSettings.savePassword(password, host: profile.host, accountTypeRaw: profile.accountType, username: profile.adminId)
                     }

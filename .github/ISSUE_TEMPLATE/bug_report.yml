@@ -1,0 +1,144 @@
+name: Bug report
+description: Report a problem with TS-890 Pro
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem! Fill in what you can — leave anything you're unsure of blank and we'll help you figure it out in a reply.
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: How bad is this problem for you?
+      options:
+        - "Critical — App won't launch, crashes, or lost my settings"
+        - "Severe — Major feature broken, no workaround"
+        - "High — Important feature broken, I can work around it"
+        - "Medium — Annoying but usable"
+        - "Low — Small / cosmetic / suggestion"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what_happened
+    attributes:
+      label: What happened?
+      placeholder: "I clicked Connect and got an error saying 'KNS login failed'."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Launch TS-890 Pro
+        2. Click Connect
+        3. ...
+    validations:
+      required: false
+
+  - type: input
+    id: app_version
+    attributes:
+      label: TS-890 Pro version
+      description: "TS-890 Pro menu → About TS-890 Pro. Example: 1.7.0"
+    validations:
+      required: false
+
+  - type: input
+    id: macos_version
+    attributes:
+      label: macOS version
+      description: "Apple menu → About This Mac. Example: macOS 26.1"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: mac_arch
+    attributes:
+      label: Intel or Apple Silicon Mac?
+      description: "Apple menu → About This Mac. If it says 'Apple M1/M2/M3/M4' it's Apple Silicon."
+      options:
+        - "Apple Silicon (M1/M2/M3/M4)"
+        - "Intel"
+        - "Not sure"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: radio_model
+    attributes:
+      label: Which radio are you using?
+      options:
+        - TS-890S
+        - TS-990S
+        - TS-590S
+        - TS-590SG
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: radio_firmware
+    attributes:
+      label: Radio firmware version
+      description: "TS-890S: MENU → 7 → 00. TS-990: MENU → 00 → 00."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: How are you connecting to the radio?
+      options:
+        - "LAN (KNS)"
+        - "USB cable (CAT)"
+        - "Both"
+        - "Not connected yet"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: voiceover
+    attributes:
+      label: Were you using VoiceOver?
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log file contents (very helpful!)
+      description: |
+        TS-890 Pro writes a log at `~/Downloads/Kenwood control/kenwood-control.log`.
+        To find it:
+        1. Open Finder
+        2. Press Shift+Cmd+G
+        3. Paste `~/Downloads/Kenwood control/` and press Return
+        4. Open `kenwood-control.log` in TextEdit
+        5. Copy the last 100 lines or so and paste below
+      value: |
+        ```
+        paste log lines here
+        ```
+    validations:
+      required: false
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        Not sure how to find something above? Submit the form anyway — we'll walk you through it in a reply.

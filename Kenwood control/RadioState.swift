@@ -386,6 +386,22 @@ final class RadioState {
     // MARK: - Bandscope / Waterfall
     /// Current span in kHz from BS4 (5/10/25/50/100/200/500). Default 50.
     var scopeSpanKHz: Int = 50
+    /// BS0 — Scope display on/off.
+    var scopeEnabled: Bool = true
+    /// BS2 — Scope mode: center / fixed / auto-scroll.
+    var scopeMode: KenwoodCAT.ScopeMode = .center
+    /// BS6 — Scope display paused.
+    var scopePaused: Bool = false
+    /// BS8 — Scope attenuator level.
+    var scopeAttenuator: KenwoodCAT.ScopeAttenuator = .off
+    /// BS9 — Max hold on/off.
+    var scopeMaxHold: Bool = false
+    /// BSA — Display averaging.
+    var scopeAveraging: KenwoodCAT.ScopeAveraging = .off
+    /// BSB — Waterfall speed (1–4).
+    var scopeWaterfallSpeed: Int = 2
+    /// BSC — Reference level raw (0–120, maps to 0–60 dB in 0.5 dB steps).
+    var scopeRefLevel: Int = 0
 
     // MARK: - Digital mode configuration state
     var isConfiguredForDigitalMode: Bool = false
@@ -723,7 +739,7 @@ final class RadioState {
                     // Enable bandscope streaming to LAN (high cycle) and read span
                     if self.connectionType == .lan && self.capabilities.hasScope {
                         self.send("DD01;")   // Output to LAN, High cycle
-                        self.send("BS4;")    // Read current span setting
+                        self.queryScopeState()
                     }
                     if self.cwGreetingEnabled {
                         AppFileLogger.shared.log("Morse: playing connect greeting (CQ)")
@@ -2198,10 +2214,35 @@ final class RadioState {
             return
         }
 
-        if core.hasPrefix("BS4"), core.count >= 4 {
-            let spanTable = [5, 10, 25, 50, 100, 200, 500]
-            if let code = Int(core.dropFirst(3).prefix(1)), code < spanTable.count {
-                scopeSpanKHz = spanTable[code]
+        // BS — Bandscope commands (BS0, BS2, BS4, BS6, BS8, BS9, BSA, BSB, BSC)
+        if core.hasPrefix("BS"), core.count >= 4 {
+            let sub = core.dropFirst(2)
+            if sub.hasPrefix("0"), let v = Int(sub.dropFirst(1).prefix(1)) {
+                scopeEnabled = (v == 1)
+            } else if sub.hasPrefix("2"), let v = Int(sub.dropFirst(1).prefix(1)),
+                      let mode = KenwoodCAT.ScopeMode(rawValue: v) {
+                scopeMode = mode
+            } else if sub.hasPrefix("4") {
+                let spanTable = [5, 10, 25, 50, 100, 200, 500]
+                if let code = Int(sub.dropFirst(1).prefix(1)), code < spanTable.count {
+                    scopeSpanKHz = spanTable[code]
+                }
+            } else if sub.hasPrefix("6"), let v = Int(sub.dropFirst(1).prefix(1)) {
+                scopePaused = (v == 1)
+            } else if sub.hasPrefix("8"), let v = Int(sub.dropFirst(1).prefix(1)),
+                      let att = KenwoodCAT.ScopeAttenuator(rawValue: v) {
+                scopeAttenuator = att
+            } else if sub.hasPrefix("9"), let v = Int(sub.dropFirst(1).prefix(1)) {
+                scopeMaxHold = (v == 1)
+            } else if sub.hasPrefix("A"), let v = Int(sub.dropFirst(1).prefix(1)),
+                      let avg = KenwoodCAT.ScopeAveraging(rawValue: v) {
+                scopeAveraging = avg
+            } else if sub.hasPrefix("B"), let v = Int(sub.dropFirst(1).prefix(1)), v >= 1, v <= 4 {
+                scopeWaterfallSpeed = v
+            } else if sub.hasPrefix("C") {
+                if let v = Int(sub.dropFirst(1).prefix(3)) {
+                    scopeRefLevel = max(0, min(120, v))
+                }
             }
             return
         }
@@ -4037,6 +4078,72 @@ final class RadioState {
             }
         }
         source.resume()
+    }
+
+    // MARK: - Bandscope Controls
+
+    func setScopeEnabled(_ on: Bool) {
+        scopeEnabled = on
+        send(KenwoodCAT.setScopeEnabled(on))
+    }
+
+    func setScopeMode(_ mode: KenwoodCAT.ScopeMode) {
+        scopeMode = mode
+        send(KenwoodCAT.setScopeMode(mode))
+    }
+
+    func setScopeSpan(kHz: Int) {
+        guard let entry = KenwoodCAT.scopeSpanOptions.first(where: { $0.kHz == kHz }) else { return }
+        scopeSpanKHz = kHz
+        send(KenwoodCAT.setScopeSpan(code: entry.code))
+    }
+
+    func setScopePaused(_ paused: Bool) {
+        scopePaused = paused
+        send(KenwoodCAT.setScopePaused(paused))
+    }
+
+    func setScopeAttenuator(_ att: KenwoodCAT.ScopeAttenuator) {
+        scopeAttenuator = att
+        send(KenwoodCAT.setScopeAttenuator(att))
+    }
+
+    func setScopeMaxHold(_ on: Bool) {
+        scopeMaxHold = on
+        send(KenwoodCAT.setScopeMaxHold(on))
+    }
+
+    func setScopeAveraging(_ avg: KenwoodCAT.ScopeAveraging) {
+        scopeAveraging = avg
+        send(KenwoodCAT.setScopeAveraging(avg))
+    }
+
+    func setScopeWaterfallSpeed(_ speed: Int) {
+        scopeWaterfallSpeed = max(1, min(speed, 4))
+        send(KenwoodCAT.setScopeWaterfallSpeed(scopeWaterfallSpeed))
+    }
+
+    func setScopeRefLevel(_ value: Int) {
+        scopeRefLevel = max(0, min(value, 120))
+        send(KenwoodCAT.setScopeRefLevel(scopeRefLevel))
+    }
+
+    func clearScopeWaterfall() {
+        send(KenwoodCAT.clearScopeWaterfall())
+    }
+
+    /// Query all scope settings from the radio (called after connect).
+    func queryScopeState() {
+        guard connectionType == .lan, capabilities.hasScope else { return }
+        send(KenwoodCAT.getScopeEnabled())
+        send(KenwoodCAT.getScopeMode())
+        send(KenwoodCAT.getScopeSpan())
+        send(KenwoodCAT.getScopePaused())
+        send(KenwoodCAT.getScopeAttenuator())
+        send(KenwoodCAT.getScopeMaxHold())
+        send(KenwoodCAT.getScopeAveraging())
+        send(KenwoodCAT.getScopeWaterfallSpeed())
+        send(KenwoodCAT.getScopeRefLevel())
     }
 
     func stopMenuDiscovery() {

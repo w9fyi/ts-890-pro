@@ -27,6 +27,15 @@ final class WaterfallEngine {
     /// Most-recently received spectrum points (640 values). Updated on main actor.
     private(set) var currentPoints: [UInt8] = []
 
+    /// Max-hold peak envelope — lowest raw values seen (lower = stronger signal).
+    /// Reset when maxHoldEnabled transitions to true or clearMaxHold() is called.
+    private(set) var maxHoldPoints: [UInt8] = []
+
+    /// Whether max-hold tracking is active.
+    var maxHoldEnabled: Bool = false {
+        didSet { if maxHoldEnabled && !oldValue { clearMaxHold() } }
+    }
+
     /// Rendered waterfall image, updated every time a new row arrives.
     private(set) var waterfallImage: CGImage?
 
@@ -40,10 +49,23 @@ final class WaterfallEngine {
 
     // MARK: - Public
 
+    /// Clear the max-hold peak envelope.
+    func clearMaxHold() {
+        maxHoldPoints = [UInt8](repeating: 0xFF, count: WaterfallEngine.pointsPerRow)
+    }
+
     /// Push a new 640-point row.  O(n) memmove + O(640) colormap.
     func push(_ points: [UInt8]) {
         guard points.count == WaterfallEngine.pointsPerRow else { return }
         currentPoints = points
+
+        // Update max-hold envelope (lower raw value = stronger signal)
+        if maxHoldEnabled {
+            if maxHoldPoints.count != points.count { clearMaxHold() }
+            for i in 0..<points.count {
+                if points[i] < maxHoldPoints[i] { maxHoldPoints[i] = points[i] }
+            }
+        }
 
         let rowBytes = width * 4
 
@@ -70,6 +92,7 @@ final class WaterfallEngine {
 
     func clear() {
         currentPoints = []
+        maxHoldPoints = []
         pixelBuffer = [UInt8](repeating: 0, count: width * height * 4)
         waterfallImage = nil
     }

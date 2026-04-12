@@ -1514,20 +1514,22 @@ struct AnalogMeterView: View {
                 drawMeter(ctx: ctx, size: size, normalized: normalized)
             }
             .frame(height: 70)
+            .animation(KenwoodTheme.needleSpring, value: normalized)
             .accessibilityHidden(true)
 
             Text(type.label)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(KenwoodTheme.labelSecondary)
 
             Text(type == .none_ ? "---" : type.formatValue(rawValue))
                 .font(.system(.caption, design: .monospaced))
                 .fontWeight(.semibold)
+                .foregroundStyle(KenwoodTheme.amber)
         }
         .padding(8)
-        .background(Color(.windowBackgroundColor))
+        .background(KenwoodTheme.panel)
         .cornerRadius(8)
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.3), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(KenwoodTheme.border, lineWidth: 1))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(type.label)
         .accessibilityValue(type == .none_ ? "off" : type.formatValue(rawValue))
@@ -1543,17 +1545,21 @@ struct AnalogMeterView: View {
         let cy = size.height - 8
         let r = min(cx, cy) - 4
 
-        // Background arc
+        // Background arc — Kenwood dark face
         let startAngle: Double = 200  // degrees from +x axis (SwiftUI uses degrees)
         let endAngle: Double = 340
         var bg = Path()
         bg.addArc(center: CGPoint(x: cx, y: cy), radius: r,
                   startAngle: .degrees(startAngle), endAngle: .degrees(endAngle), clockwise: false)
-        ctx.stroke(bg, with: .color(.secondary.opacity(0.25)), lineWidth: 6)
+        ctx.stroke(bg, with: .color(KenwoodTheme.meterFace), lineWidth: 6)
 
-        // Color zones: green 0-0.6, yellow 0.6-0.8, red 0.8-1.0
+        // Color zones: green 0-0.6, amber 0.6-0.8, red 0.8-1.0
         let totalArc = endAngle - startAngle
-        let zones: [(Double, Double, Color)] = [(0, 0.6, .green), (0.6, 0.8, .yellow), (0.8, 1.0, .red)]
+        let zones: [(Double, Double, Color)] = [
+            (0, 0.6, KenwoodTheme.meterGreen),
+            (0.6, 0.8, KenwoodTheme.meterAmber),
+            (0.8, 1.0, KenwoodTheme.meterRed),
+        ]
         for (lo, hi, color) in zones {
             var arc = Path()
             arc.addArc(center: CGPoint(x: cx, y: cy), radius: r,
@@ -1561,6 +1567,17 @@ struct AnalogMeterView: View {
                        endAngle: .degrees(startAngle + hi * totalArc),
                        clockwise: false)
             ctx.stroke(arc, with: .color(color.opacity(0.5)), lineWidth: 6)
+        }
+
+        // Tick marks
+        for tick in stride(from: 0.0, through: 1.0, by: 0.1) {
+            let a = (startAngle + tick * totalArc) * .pi / 180
+            let inner = r * 0.88
+            let outer = r * 1.06
+            ctx.stroke(Path { p in
+                p.move(to: CGPoint(x: cx + inner * cos(a), y: cy + inner * sin(a)))
+                p.addLine(to: CGPoint(x: cx + outer * cos(a), y: cy + outer * sin(a)))
+            }, with: .color(KenwoodTheme.border), lineWidth: 0.5)
         }
 
         // Needle
@@ -1571,10 +1588,10 @@ struct AnalogMeterView: View {
         var needle = Path()
         needle.move(to: CGPoint(x: cx, y: cy))
         needle.addLine(to: CGPoint(x: nx, y: ny))
-        ctx.stroke(needle, with: .color(.primary), lineWidth: 1.5)
+        ctx.stroke(needle, with: .color(KenwoodTheme.needle), lineWidth: 1.5)
 
         // Pivot dot
         ctx.fill(Circle().path(in: CGRect(x: cx - 3, y: cy - 3, width: 6, height: 6)),
-                 with: .color(.primary))
+                 with: .color(KenwoodTheme.pivot))
     }
 }

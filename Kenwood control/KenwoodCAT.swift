@@ -917,4 +917,79 @@ enum KenwoodCAT {
     }
     static func getScanType() -> String { "SC3;" }
     static func setScanType(_ type: ScanType) -> String { "SC3\(type.rawValue);" }
+
+    // MARK: - Bandscope (BS0–BSD, DD)
+
+    /// BS0 — Scope display ON/OFF.
+    static func getScopeEnabled() -> String { "BS0;" }
+    static func setScopeEnabled(_ on: Bool) -> String { "BS0\(on ? 1 : 0);" }
+
+    /// BS2 — Scope mode: 0=Center, 1=Fixed, 2=Auto-scroll.
+    enum ScopeMode: Int, CaseIterable, Identifiable {
+        case center = 0, fixed = 1, autoScroll = 2
+        var id: Int { rawValue }
+        var label: String { ["Center", "Fixed", "Auto-scroll"][rawValue] }
+    }
+    static func getScopeMode() -> String { "BS2;" }
+    static func setScopeMode(_ mode: ScopeMode) -> String { "BS2\(mode.rawValue);" }
+
+    /// BS3 — Set scope span. P1: 0=5kHz, 1=10kHz, 2=25kHz, 3=50kHz, 4=100kHz, 5=200kHz, 6=500kHz.
+    static let scopeSpanOptions: [(kHz: Int, code: Int)] = [
+        (5, 0), (10, 1), (25, 2), (50, 3), (100, 4), (200, 5), (500, 6)
+    ]
+    static func setScopeSpan(code: Int) -> String {
+        let clamped = max(0, min(code, 6))
+        return "BS3\(clamped);"
+    }
+    /// BS4 — Read current scope span.
+    static func getScopeSpan() -> String { "BS4;" }
+
+    /// BS6 — Scope display pause: 0=run, 1=paused.
+    static func getScopePaused() -> String { "BS6;" }
+    static func setScopePaused(_ paused: Bool) -> String { "BS6\(paused ? 1 : 0);" }
+
+    /// BS8 — Scope attenuator: 0=0dB, 1=−10dB, 2=−20dB, 3=−30dB.
+    enum ScopeAttenuator: Int, CaseIterable, Identifiable {
+        case off = 0, minus10 = 1, minus20 = 2, minus30 = 3
+        var id: Int { rawValue }
+        var label: String { ["0 dB", "−10 dB", "−20 dB", "−30 dB"][rawValue] }
+    }
+    static func getScopeAttenuator() -> String { "BS8;" }
+    static func setScopeAttenuator(_ att: ScopeAttenuator) -> String { "BS8\(att.rawValue);" }
+
+    /// BS9 — Max hold: 0=off, 1=on.
+    static func getScopeMaxHold() -> String { "BS9;" }
+    static func setScopeMaxHold(_ on: Bool) -> String { "BS9\(on ? 1 : 0);" }
+
+    /// BSA — Display averaging: 0=off, 1=low, 2=medium, 3=high.
+    enum ScopeAveraging: Int, CaseIterable, Identifiable {
+        case off = 0, low = 1, medium = 2, high = 3
+        var id: Int { rawValue }
+        var label: String { ["Off", "Low", "Medium", "High"][rawValue] }
+    }
+    static func getScopeAveraging() -> String { "BSA;" }
+    static func setScopeAveraging(_ avg: ScopeAveraging) -> String { "BSA\(avg.rawValue);" }
+
+    /// BSB — Waterfall display speed: 1=slow … 4=fast.
+    static func getScopeWaterfallSpeed() -> String { "BSB;" }
+    static func setScopeWaterfallSpeed(_ speed: Int) -> String {
+        let clamped = max(1, min(speed, 4))
+        return "BSB\(clamped);"
+    }
+
+    /// BSC — Reference level: 0–60 dB (0.5 dB steps on radio, but P1 is 000–120 mapping to 0–60 dB).
+    static func getScopeRefLevel() -> String { "BSC;" }
+    static func setScopeRefLevel(_ value: Int) -> String {
+        let clamped = max(0, min(value, 120))
+        return String(format: "BSC%03d;", clamped)
+    }
+
+    /// BSD — Clear waterfall display.
+    static func clearScopeWaterfall() -> String { "BSD;" }
+
+    /// DD — Scope data output. 00=off, 01=LAN high, 02=LAN mid, 03=LAN low.
+    static func setScopeDataOutput(code: Int) -> String {
+        let clamped = max(0, min(code, 3))
+        return String(format: "DD%02d;", clamped)
+    }
 }

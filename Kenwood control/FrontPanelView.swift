@@ -787,7 +787,7 @@ private struct VFORow: View {
                         .accessibilityLabel("Band up")
                     TextField("", text: $freqAString)
                         .font(.system(size: 32, weight: .light, design: .monospaced))
-                        .foregroundColor(.green)
+                        .foregroundColor(KenwoodTheme.amber)
                         .focused($vfoAFocused)
                         .textFieldStyle(.plain)
                         .frame(minWidth: 160)
@@ -810,7 +810,7 @@ private struct VFORow: View {
                     bandMenu(vfo: "B")
                     TextField("", text: $freqBString)
                         .font(.system(size: 32, weight: .light, design: .monospaced))
-                        .foregroundColor(Color(red: 0.6, green: 0.8, blue: 1.0))
+                        .foregroundColor(KenwoodTheme.amberDim)
                         .textFieldStyle(.plain)
                         .frame(minWidth: 160)
                         .accessibilityLabel("VFO B frequency — click to edit")
@@ -826,13 +826,13 @@ private struct VFORow: View {
             // RX/TX indicator
             VStack(spacing: 2) {
                 Circle()
-                    .fill(radio.isTransmitting == true ? Color.red : Color(white: 0.2))
+                    .fill(radio.isTransmitting == true ? KenwoodTheme.txRed : KenwoodTheme.rxIdle)
                     .frame(width: 14, height: 14)
                     .accessibilityLabel(radio.isTransmitting == true ? "Transmitting" : "Receiving")
                     .accessibilityAddTraits([.isImage, .updatesFrequently])
                 Text(radio.isTransmitting == true ? "TX" : "RX")
                     .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(radio.isTransmitting == true ? .red : .secondary)
+                    .foregroundColor(radio.isTransmitting == true ? KenwoodTheme.txRed : KenwoodTheme.labelSecondary)
                     .accessibilityHidden(true)  // label is on the Circle above
             }
         }
@@ -1486,6 +1486,7 @@ private struct ScopePanel: View {
     var body: some View {
         ScopeView(
             engine: engine,
+            radio: radio,
             spanKHz: radio.scopeSpanKHz,
             centerHz: radio.vfoAFrequencyHz
         )
@@ -1543,7 +1544,7 @@ private struct KnobButton: View {
 
 struct CompactButtonStyle: ButtonStyle {
     var isActive: Bool = false
-    var tint: Color = .accentColor
+    var tint: Color = KenwoodTheme.amberGlow
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -1554,11 +1555,11 @@ struct CompactButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(isActive
                           ? tint.opacity(0.25)
-                          : Color(white: 0.18).opacity(0.8))
+                          : KenwoodTheme.buttonInactive.opacity(0.8))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
-                    .stroke(isActive ? tint.opacity(0.6) : Color(white: 0.3), lineWidth: 0.5)
+                    .stroke(isActive ? tint.opacity(0.6) : KenwoodTheme.border, lineWidth: 0.5)
             )
             .foregroundColor(isActive ? tint : .primary)
             .opacity(configuration.isPressed ? 0.7 : 1.0)
@@ -1629,41 +1630,61 @@ private struct MeterGridView: View {
     }
 
     private func analogGauge(name: String, value: Double, maxVal: Double) -> some View {
-        VStack(spacing: 2) {
+        let norm = Swift.min(1, Swift.max(0, value))
+        return VStack(spacing: 2) {
             Canvas { ctx, size in
                 let cx = size.width / 2
                 let cy = size.height * 0.92
                 let r  = Swift.min(size.width, size.height) * 0.80
 
+                // Background arc — Kenwood dark face
                 let arcPath = Path { p in
                     p.addArc(center: CGPoint(x: cx, y: cy), radius: r,
                              startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
                 }
-                ctx.stroke(arcPath, with: .color(Color(white: 0.25)), lineWidth: 3)
+                ctx.stroke(arcPath, with: .color(KenwoodTheme.meterFace), lineWidth: 4)
 
-                let norm    = Swift.min(1, Swift.max(0, value))
+                // Color zone fill up to current value
                 let endDeg  = 180.0 - norm * 180.0
                 let fillPath = Path { p in
                     p.addArc(center: CGPoint(x: cx, y: cy), radius: r,
                              startAngle: .degrees(180), endAngle: .degrees(endDeg), clockwise: false)
                 }
-                let meterColor: Color = norm > 0.8 ? .red : (norm > 0.5 ? .yellow : .green)
-                ctx.stroke(fillPath, with: .color(meterColor), lineWidth: 3)
+                let meterColor: Color = norm > 0.8 ? KenwoodTheme.meterRed
+                    : (norm > 0.5 ? KenwoodTheme.meterAmber : KenwoodTheme.meterGreen)
+                ctx.stroke(fillPath, with: .color(meterColor), lineWidth: 4)
 
+                // Tick marks along the arc
+                for tick in stride(from: 0.0, through: 1.0, by: 0.1) {
+                    let a = Double.pi - tick * Double.pi
+                    let inner = r * 0.88
+                    let outer = r * 1.05
+                    ctx.stroke(Path { p in
+                        p.move(to: CGPoint(x: cx + inner * cos(a), y: cy - inner * sin(a)))
+                        p.addLine(to: CGPoint(x: cx + outer * cos(a), y: cy - outer * sin(a)))
+                    }, with: .color(KenwoodTheme.border), lineWidth: 0.5)
+                }
+
+                // Needle
                 let angle = Double.pi - norm * Double.pi
                 let nx = cx + r * 0.85 * cos(angle)
                 let ny = cy - r * 0.85 * sin(angle)
                 ctx.stroke(Path { p in
                     p.move(to: CGPoint(x: cx, y: cy))
                     p.addLine(to: CGPoint(x: nx, y: ny))
-                }, with: .color(.white), lineWidth: 1.5)
+                }, with: .color(KenwoodTheme.needle), lineWidth: 1.5)
+
+                // Pivot dot
+                ctx.fill(Circle().path(in: CGRect(x: cx - 2.5, y: cy - 2.5, width: 5, height: 5)),
+                         with: .color(KenwoodTheme.pivot))
             }
             .frame(height: 60)
+            .animation(KenwoodTheme.needleSpring, value: norm)
             .accessibilityHidden(true)
 
             Text(name)
                 .font(.system(size: 9))
-                .foregroundColor(.secondary)
+                .foregroundColor(KenwoodTheme.labelSecondary)
                 .accessibilityHidden(true)
         }
         .frame(maxWidth: .infinity)
@@ -1688,7 +1709,7 @@ private struct InlineMeterBar: View {
                 .frame(minWidth: 20, alignment: .trailing)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2).fill(Color(white: 0.15))
+                    RoundedRectangle(cornerRadius: 2).fill(KenwoodTheme.barBackground)
                     RoundedRectangle(cornerRadius: 2)
                         .fill(color.opacity(0.8))
                         .frame(width: geo.size.width * CGFloat(Swift.max(0, Swift.min(1, value))))
@@ -1709,9 +1730,9 @@ private struct DSPMeterBars: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            InlineMeterBar(label: "S", value: meters.readings[0] ?? 0, color: .green)
+            InlineMeterBar(label: "S", value: meters.readings[0] ?? 0, color: KenwoodTheme.barS)
                 .frame(width: 70)
-            InlineMeterBar(label: "P", value: meters.readings[5] ?? 0, color: .yellow)
+            InlineMeterBar(label: "P", value: meters.readings[5] ?? 0, color: KenwoodTheme.barPower)
                 .frame(width: 50)
         }
     }
@@ -1723,13 +1744,13 @@ private struct StripMeterBars: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            InlineMeterBar(label: "S",   value: meters.readings[0] ?? 0, color: .green)
+            InlineMeterBar(label: "S",   value: meters.readings[0] ?? 0, color: KenwoodTheme.barS)
                 .frame(width: 80)
-            InlineMeterBar(label: "Pwr", value: meters.readings[5] ?? 0, color: .yellow)
+            InlineMeterBar(label: "Pwr", value: meters.readings[5] ?? 0, color: KenwoodTheme.barPower)
                 .frame(width: 70)
-            InlineMeterBar(label: "SWR", value: meters.readings[3] ?? 0, color: .orange)
+            InlineMeterBar(label: "SWR", value: meters.readings[3] ?? 0, color: KenwoodTheme.barSWR)
                 .frame(width: 60)
-            InlineMeterBar(label: "ALC", value: meters.readings[2] ?? 0, color: .red)
+            InlineMeterBar(label: "ALC", value: meters.readings[2] ?? 0, color: KenwoodTheme.barALC)
                 .frame(width: 60)
         }
     }

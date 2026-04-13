@@ -778,6 +778,7 @@ final class RadioState {
                     // are correct before we send anything model-specific. Without this,
                     // a TS-990S or TS-590 gets AI4 (890-specific) and the wrong mode
                     // commands, which silently fails and looks like flaky RX/TX.
+                    // (Band-prefix-aware AF/RF gain priming lives in primeRadioAfterID.)
                     self.awaitIDThenPrimeRadio()
                     if self.cwGreetingEnabled {
                         AppFileLogger.shared.log("Morse: playing connect greeting (CQ)")
@@ -960,8 +961,8 @@ final class RadioState {
         let lan = TS890Connection()
         connection = lan
         wireCallbacks()
-        let needsUTF16 = radioModelHint == .ts990s
-        lan.connect(host: host, port: p, useKnsLogin: useKnsLogin, accountType: type, adminId: adminId, adminPassword: adminPassword, preferUTF16LE: needsUTF16)
+        let is990 = radioModelHint == .ts990s
+        lan.connect(host: host, port: p, useKnsLogin: useKnsLogin, accountType: type, adminId: adminId, adminPassword: adminPassword, preferUTF16LE: is990, usesBandPrefix: is990)
         connectionStatus = ConnectionStatus.connecting.rawValue
     }
 
@@ -1214,8 +1215,15 @@ final class RadioState {
         if let serial = connection as? SerialCATConnection {
             serial.updateAICommand(capabilities.aiCommand)
         }
-        send(KenwoodCAT.getAFGain())
-        send(KenwoodCAT.getRFGain())
+        // TS-990S AF/RF gain queries require a leading band parameter (0 = Main);
+        // the TS-890S/590 forms take none.
+        if capabilities.usesBandPrefix {
+            send(KenwoodCAT.getAFGain(band: 0))
+            send(KenwoodCAT.getRFGain(band: 0))
+        } else {
+            send(KenwoodCAT.getAFGain())
+            send(KenwoodCAT.getRFGain())
+        }
         queryTop5()
         if connectionType == .lan && capabilities.hasScope {
             send("DD01;")
@@ -1232,8 +1240,14 @@ final class RadioState {
         send(KenwoodCAT.getVFOAFrequency())
         // VFO B + split (FR/FT), RIT/XIT, RX filter, power, ATU.
         send(KenwoodCAT.getVFOBFrequency())
-        send(KenwoodCAT.getReceiverVFO())
-        send(KenwoodCAT.getTransmitterVFO())
+        // TS-990S uses CB/TB (Operating/Transmit Band) instead of FR/FT (VFO).
+        if capabilities.usesCBTB {
+            send(KenwoodCAT.getOperatingBand())
+            send(KenwoodCAT.getTransmitBand())
+        } else {
+            send(KenwoodCAT.getReceiverVFO())
+            send(KenwoodCAT.getTransmitterVFO())
+        }
         send(KenwoodCAT.ritGetState())
         send(KenwoodCAT.xitGetState())
         send(KenwoodCAT.ritXitGetOffset())
@@ -1259,8 +1273,13 @@ final class RadioState {
                 send(KenwoodCAT.getDataMode())
             }
         }
-        send(KenwoodCAT.getSquelchLevel())
-        send(KenwoodCAT.getNoiseReduction())
+        if capabilities.usesBandPrefix {
+            send(KenwoodCAT.getSquelchLevel(band: 0))
+            send(KenwoodCAT.getNoiseReduction(band: 0))
+        } else {
+            send(KenwoodCAT.getSquelchLevel())
+            send(KenwoodCAT.getNoiseReduction())
+        }
         send(KenwoodCAT.getNotch())
         // ARCP-890 parity: AGC, ATT, PRE, NB, BC, Mic, VOX, Monitor, Speech proc, CW speed/break-in.
         send(KenwoodCAT.getAGC())
@@ -2461,9 +2480,34 @@ final class RadioState {
             return
         }
 
-        if core.hasPrefix("NR") {
+        // TS-990S: CB (Operating Band) → maps to rxVFO. 0=Main≈A, 1=Sub≈B.
+        if core.hasPrefix("CB") {
             let p1 = core.dropFirst(2).prefix(1)
-            if let raw = Int(p1), let mode = KenwoodCAT.NoiseReductionMode(rawValue: raw) {
+            if let raw = Int(p1), let vfo = KenwoodCAT.VFO(rawValue: raw) {
+                rxVFO = vfo
+            }
+            return
+        }
+
+        // TS-990S: TB (Transmit Band) → maps to txVFO. 0=Main≈A, 1=Sub≈B.
+        if core.hasPrefix("TB") {
+            let p1 = core.dropFirst(2).prefix(1)
+            if let raw = Int(p1), let vfo = KenwoodCAT.VFO(rawValue: raw) {
+                txVFO = vfo
+            }
+            return
+        }
+
+        if core.hasPrefix("NR") {
+            // TS-890S: NR{mode} (1 digit). TS-990S: NR{band}{mode} (band + 1 digit).
+            let params = core.dropFirst(2)
+            let modeChar: Substring
+            if capabilities.usesBandPrefix, params.count >= 2 {
+                modeChar = params.dropFirst(1).prefix(1) // skip band digit
+            } else {
+                modeChar = params.prefix(1)
+            }
+            if let raw = Int(modeChar), let mode = KenwoodCAT.NoiseReductionMode(rawValue: raw) {
                 transceiverNRMode = mode
             }
             return

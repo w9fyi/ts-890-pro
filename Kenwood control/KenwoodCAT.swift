@@ -45,12 +45,19 @@ enum KenwoodCAT {
     }
 
     // MARK: - AF Gain (Audio / Speaker Level)
+    // TS-890S: AG{3 digits}.  TS-990S: AG{P1}{3 digits} where P1=0(Main)/1(Sub).
 
     static func getAFGain() -> String { "AG;" }
+    static func getAFGain(band: Int) -> String { "AG\(band);" }
 
     static func setAFGain(_ value: Int) -> String {
         let clamped = max(0, min(value, 255))
         return String(format: "AG%03d;", clamped)
+    }
+
+    static func setAFGain(_ value: Int, band: Int) -> String {
+        let clamped = max(0, min(value, 255))
+        return String(format: "AG%d%03d;", band, clamped)
     }
 
     // MARK: - Operating Mode (OM)
@@ -194,8 +201,11 @@ enum KenwoodCAT {
         var label: String { ["Off", "ACC 2", "USB Audio", "LAN"][rawValue] }
     }
 
+    // TS-890S: NR{1 digit}.  TS-990S: NR{P1}{1 digit} where P1=0(Main)/1(Sub).
     static func getNoiseReduction() -> String { "NR;" }
+    static func getNoiseReduction(band: Int) -> String { "NR\(band);" }
     static func setNoiseReduction(_ mode: NoiseReductionMode) -> String { "NR\(mode.rawValue);" }
+    static func setNoiseReduction(_ mode: NoiseReductionMode, band: Int) -> String { "NR\(band)\(mode.rawValue);" }
 
     static func getNotch() -> String { "NT;" }
     static func setNotch(enabled: Bool) -> String { "NT\(enabled ? 1 : 0);" }
@@ -226,24 +236,38 @@ enum KenwoodCAT {
     }
 
     // MARK: - Squelch / Meter
+    // TS-890S: SQ{3 digits}, SM{4 digits}.  TS-990S: SQ{P1}{3 digits}, SM{P1}{4 digits}.
 
     static func getSquelchLevel() -> String { "SQ;" }
+    static func getSquelchLevel(band: Int) -> String { "SQ\(band);" }
 
     static func setSquelchLevel(_ level: Int) -> String {
         let clamped = max(0, min(level, 255))
         return String(format: "SQ%03d;", clamped)
     }
 
+    static func setSquelchLevel(_ level: Int, band: Int) -> String {
+        let clamped = max(0, min(level, 255))
+        return String(format: "SQ%d%03d;", band, clamped)
+    }
+
     static func getSMeter() -> String { "SM;" }
+    static func getSMeter(band: Int) -> String { "SM\(band);" }
 
     // MARK: - RF Gain
+    // TS-890S: RG{3 digits}.  TS-990S: RG{P1}{3 digits} where P1=0(Main)/1(Sub).
 
     static func getRFGain() -> String { "RG;" }
+    static func getRFGain(band: Int) -> String { "RG\(band);" }
 
     static func setRFGain(_ value: Int) -> String {
-        // TS-890S PC Control command reference guide: 000..255
         let clamped = max(0, min(value, 255))
         return String(format: "RG%03d;", clamped)
+    }
+
+    static func setRFGain(_ value: Int, band: Int) -> String {
+        let clamped = max(0, min(value, 255))
+        return String(format: "RG%d%03d;", band, clamped)
     }
 
     // MARK: - PTT (TX/RX)
@@ -267,11 +291,21 @@ enum KenwoodCAT {
         var label: String { self == .a ? "VFO A" : "VFO B" }
     }
 
+    // TS-890S: FR/FT (Receiver/Transmitter VFO).
+    // TS-990S: CB/TB (Operating Band / Transmit Band) — FR/FT don't exist.
     static func getReceiverVFO() -> String { "FR;" }
     static func setReceiverVFO(_ vfo: VFO) -> String { "FR\(vfo.rawValue);" }
 
     static func getTransmitterVFO() -> String { "FT;" }
     static func setTransmitterVFO(_ vfo: VFO) -> String { "FT\(vfo.rawValue);" }
+
+    /// TS-990S: CB (Operating Band). 0=Main, 1=Sub.
+    static func getOperatingBand() -> String { "CB;" }
+    static func setOperatingBand(_ band: Int) -> String { "CB\(band);" }
+
+    /// TS-990S: TB (Transmit Band). 0=Main (split off), 1=Sub (split on).
+    static func getTransmitBand() -> String { "TB;" }
+    static func setTransmitBand(_ band: Int) -> String { "TB\(band);" }
 
     // MARK: - VFO Swap / Copy
 

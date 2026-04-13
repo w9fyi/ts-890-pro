@@ -82,7 +82,7 @@ struct KenwoodCapabilities {
     let hasMorseDecoder: Bool
 
     /// KNS login protocol (##CN/##ID with KNS account types).
-    /// Only TS-890S. TS-990S has its own LAN protocol; TS-590S has no LAN.
+    /// TS-990S (original KNS radio) and TS-890S. TS-590S has no LAN.
     let hasKNS: Bool
 
     /// Auto-Information command string to send after connect.
@@ -172,7 +172,7 @@ struct KenwoodCapabilities {
                 has18BandEQ:          true,    // Uses UT/UR commands
                 hasAudioSourceSelect: true,
                 hasMorseDecoder:      false,
-                hasKNS:               false,   // TS-990S has proprietary LAN, not KNS
+                hasKNS:               true,    // TS-990S was the first KNS radio
                 aiCommand:            "AI4;",
                 hasDualNoiseBlanker:  true,
                 exMenuFormat:         .ts990,

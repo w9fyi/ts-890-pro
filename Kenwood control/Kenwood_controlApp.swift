@@ -282,6 +282,12 @@ struct Kenwood_controlApp: App {
                     openWindow(id: "userManual")
                 }
                 .keyboardShortcut("?", modifiers: .command)
+
+                Divider()
+
+                Button("Report a Problem…") {
+                    BugReportHelper.fileReport(radio: radio)
+                }
             }
         }
         Settings {

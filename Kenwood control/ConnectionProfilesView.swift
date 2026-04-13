@@ -153,7 +153,8 @@ struct ConnectionProfilesView: View {
             ) {
                 radio.adminPassword = pw
             }
-            radio.connect(host: profile.host, port: profile.port)
+            let modelHint = KenwoodRadioModel(rawValue: profile.radioModelHint) ?? .unknown
+            radio.connect(host: profile.host, port: profile.port, radioModelHint: modelHint)
         } else {
             // USB serial connection — host field stores the serial port path
             radio.connectUSB(portPath: profile.host)

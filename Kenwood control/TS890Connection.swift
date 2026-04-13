@@ -1,7 +1,9 @@
 import Foundation
 import Darwin
 
-/// TCP connection to a TS-890S via KNS (LAN).
+/// TCP connection to a Kenwood radio via KNS (LAN).
+/// Supports TS-890S (UTF-8) and TS-990S (UTF-16LE) — encoding is auto-detected
+/// on first connect by inspecting the ##CN response bytes.
 /// Uses POSIX BSD sockets instead of Network.framework so that macOS Local
 /// Network TCC permission is never required (NWConnection triggers TCC;
 /// raw sockets do not).
@@ -37,6 +39,15 @@ final class TS890Connection {
     private let authTimeoutInterval: TimeInterval = 10
     private let connectTimeoutInterval: TimeInterval = 15
     private var currentHost: String?
+    private var currentPort: UInt16 = 60000
+
+    // UTF-16LE support (TS-990S). Detected automatically from ##CN response
+    // or inferred when no frames arrive within the encoding probe window.
+    private var useUTF16LE: Bool = false
+    private var didRetryEncoding: Bool = false
+    private var hasReceivedFrame: Bool = false
+    private var encodingProbeTimer: DispatchSourceTimer?
+    private let encodingProbeInterval: TimeInterval = 3
 
     nonisolated deinit {}
 
@@ -66,6 +77,7 @@ final class TS890Connection {
         stopAuthTimeout()
         stopConnectTimeout()
         stopKeepalive()
+        stopEncodingProbe()
         authState = .idle
     }
 
@@ -75,7 +87,8 @@ final class TS890Connection {
                  useKnsLogin: Bool,
                  accountType: KenwoodKNS.AccountType = .administrator,
                  adminId: String,
-                 adminPassword: String) {
+                 adminPassword: String,
+                 preferUTF16LE: Bool = false) {
         let cleanId = sanitizeCredential(adminId)
         let cleanPw = sanitizeCredential(adminPassword)
 
@@ -101,11 +114,16 @@ final class TS890Connection {
         queue.sync { [weak self] in
             guard let self else { return }
             self.teardown()
+            self.useUTF16LE = preferUTF16LE
+            self.didRetryEncoding = preferUTF16LE
+            self.hasReceivedFrame = false
+            self.stopEncodingProbe()
             self.useKnsLogin = useKnsLogin
             self.accountType = accountType
             self.adminId = cleanId
             self.adminPassword = cleanPw
             self.currentHost = host
+            self.currentPort = port
             self.status = .connecting
             self.onStatusChange?(self.status)
             self.onLog?("Connecting to \(host):\(port)")
@@ -213,8 +231,14 @@ final class TS890Connection {
                 self.authState = .sentCN
                 self.status = .authenticating
                 self.onStatusChange?(self.status)
-                self.onLog?("KNS: Sending ##CN")
-                self.writeDirect(KenwoodKNS.knsConnect(), fd: fd)
+                let cnCmd = KenwoodKNS.knsConnect()
+                let enc = self.useUTF16LE ? "UTF-16LE" : "UTF-8"
+                let cnData = self.useUTF16LE
+                    ? (cnCmd.data(using: .utf16LittleEndian) ?? Data())
+                    : Data(cnCmd.utf8)
+                let cnHex = cnData.map { String(format: "%02x", $0) }.joined(separator: " ")
+                self.onLog?("KNS: Sending ##CN (\(enc)) — TX raw: \(cnHex)")
+                self.writeDirect(cnCmd, fd: fd)
                 self.startAuthTimeout()
             } else {
                 self.status = .connected
@@ -223,6 +247,9 @@ final class TS890Connection {
                 self.onLog?("Enabling Auto Information (AI)")
                 self.writeDirect(KenwoodCAT.setAutoInformation(.onNonPersistent), fd: fd)
                 self.startKeepalive()
+                // Start encoding probe: if no frames arrive within 3s, the radio
+                // may need UTF-16LE (TS-990S). Switch and re-send initial commands.
+                self.startEncodingProbe()
             }
 
             // Start dedicated receive thread.
@@ -244,9 +271,11 @@ final class TS890Connection {
                     guard let self, self.socketFD == fd else { return } // deliberate teardown — ignore
                     Darwin.close(fd)
                     self.socketFD = -1
-                    self.onError?(n == 0
+                    let errMsg = n == 0
                         ? "Connection closed by radio"
-                        : "Receive error: \(String(cString: strerror(err)))")
+                        : "Receive error: \(String(cString: strerror(err))) (errno \(err))"
+                    self.onLog?("Socket recv returned \(n), errno=\(err), authState=\(self.authState)")
+                    self.onError?(errMsg)
                     self.handleDisconnect()
                 }
                 return
@@ -254,6 +283,29 @@ final class TS890Connection {
             let chunk = Data(buf[0..<n])
             queue.async { [weak self] in
                 guard let self, self.socketFD == fd else { return }
+                // During auth phase, log raw hex so we can diagnose protocol issues
+                // with radios we can't physically test (e.g. TS-990S).
+                if self.authState != .authenticated {
+                    let hex = chunk.map { String(format: "%02x", $0) }.joined(separator: " ")
+                    self.onLog?("RX raw (\(n) bytes): \(hex)")
+
+                    // Auto-detect UTF-16LE: if the response has 0x00 bytes at every odd
+                    // position, this is a UTF-16LE radio (TS-990S). Switch encoding and
+                    // auto-retry the connection once.
+                    if !self.useUTF16LE && !self.didRetryEncoding
+                        && chunk.count >= 4 && chunk.count % 2 == 0 {
+                        let looksUTF16 = stride(from: 1, to: chunk.count, by: 2)
+                            .allSatisfy { chunk[$0] == 0x00 }
+                        if looksUTF16 {
+                            self.onLog?("Detected UTF-16LE encoding — radio is likely a TS-990S")
+                            self.useUTF16LE = true
+                            self.didRetryEncoding = true
+                            // Tear down and reconnect with UTF-16LE encoding.
+                            self.retryWithUTF16LE()
+                            return
+                        }
+                    }
+                }
                 self.receiveBuffer.append(chunk)
                 self.flushFrames()
             }
@@ -269,10 +321,40 @@ final class TS890Connection {
         onLog?("Disconnected")
     }
 
+    /// Tear down the current connection and immediately reconnect using UTF-16LE
+    /// encoding. Called once when the first auth response reveals UTF-16LE bytes.
+    /// Must be called on `queue`.
+    private func retryWithUTF16LE() {
+        let host = currentHost ?? ""
+        let port = currentPort
+        guard !host.isEmpty else { return }
+
+        onLog?("Reconnecting to \(host):\(port) with UTF-16LE encoding")
+        teardown()
+        status = .connecting
+        onStatusChange?(status)
+        startConnectTimeout()
+        let gen = connectGeneration
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            self?.openSocket(host: host, port: port, generation: gen)
+        }
+    }
+
     /// Write raw bytes directly to fd. Must be called on `queue` (or from openSocket
     /// before the recv thread starts, while holding implicit queue context).
+    /// Uses UTF-16LE encoding when communicating with a TS-990S.
     private func writeDirect(_ command: String, fd: Int32) {
-        let data = Data(command.utf8)
+        let data: Data
+        if useUTF16LE {
+            guard let encoded = command.data(using: .utf16LittleEndian) else {
+                onError?("Failed to encode command as UTF-16LE")
+                return
+            }
+            data = encoded
+        } else {
+            data = Data(command.utf8)
+        }
         data.withUnsafeBytes { rawPtr in
             guard let base = rawPtr.baseAddress else { return }
             var offset = 0
@@ -287,11 +369,18 @@ final class TS890Connection {
     // MARK: - Frame parsing
 
     private func flushFrames() {
-        while let separatorRange = receiveBuffer.firstRange(of: Data([UInt8(ascii: ";")])) {
+        // TS-990S uses UTF-16LE on the wire — the semicolon delimiter is 0x3B 0x00.
+        // TS-890S and others use UTF-8 where the delimiter is a single 0x3B.
+        let delimiter: Data = useUTF16LE ? Data([0x3B, 0x00]) : Data([UInt8(ascii: ";")])
+
+        while let separatorRange = receiveBuffer.firstRange(of: delimiter) {
             let frameData = receiveBuffer.subdata(in: 0..<separatorRange.lowerBound)
-            receiveBuffer.removeSubrange(0...separatorRange.lowerBound)
+            receiveBuffer.removeSubrange(0..<separatorRange.upperBound)
             let frame: String
-            if let decoded = String(data: frameData, encoding: .utf8) {
+            if useUTF16LE {
+                guard let decoded = String(data: frameData, encoding: .utf16LittleEndian) else { continue }
+                frame = decoded
+            } else if let decoded = String(data: frameData, encoding: .utf8) {
                 frame = decoded
             } else if let decoded = String(data: frameData, encoding: .isoLatin1) {
                 frame = decoded
@@ -302,6 +391,7 @@ final class TS890Connection {
             let cleaned = frame.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters))
             guard !cleaned.isEmpty else { continue }
             let fullFrame = cleaned.hasSuffix(";") ? cleaned : (cleaned + ";")
+            hasReceivedFrame = true
 
             if fullFrame.hasPrefix("##DD2") {
                 onLog?("RX: ##DD2... (\(fullFrame.count) chars)")
@@ -338,12 +428,18 @@ final class TS890Connection {
         case .sentCN:
             if normalized.hasPrefix("##CN1") {
                 authState = .sentID
-                onLog?("KNS: Sending ##ID")
                 let fd = socketFD
                 if fd >= 0 {
-                    writeDirect(KenwoodKNS.knsLogin(accountType: accountType,
+                    let idCmd = KenwoodKNS.knsLogin(accountType: accountType,
                                                     account: adminId,
-                                                    password: adminPassword), fd: fd)
+                                                    password: adminPassword)
+                    let enc = useUTF16LE ? "UTF-16LE" : "UTF-8"
+                    let idData = useUTF16LE
+                        ? (idCmd.data(using: .utf16LittleEndian) ?? Data())
+                        : Data(idCmd.utf8)
+                    let idHex = idData.map { String(format: "%02x", $0) }.joined(separator: " ")
+                    onLog?("KNS: Sending ##ID (\(enc)) — TX raw: \(idHex)")
+                    writeDirect(idCmd, fd: fd)
                 }
             } else if normalized.hasPrefix("##CN0") {
                 onLog?("KNS: Connect rejected (##CN0) — session may still be active")
@@ -446,6 +542,40 @@ final class TS890Connection {
     private func stopKeepalive() {
         keepaliveTimer?.cancel()
         keepaliveTimer = nil
+    }
+
+    // MARK: - Encoding probe (non-KNS connections)
+
+    /// After a non-KNS TCP connect, if no CAT frames arrive within 3 seconds
+    /// the radio may need UTF-16LE encoding (TS-990S). Switch encoding and
+    /// re-send the initial commands. Only fires once.
+    private func startEncodingProbe() {
+        stopEncodingProbe()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + encodingProbeInterval)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            guard !self.hasReceivedFrame, !self.useUTF16LE, !self.didRetryEncoding else { return }
+            let fd = self.socketFD
+            guard fd >= 0 else { return }
+
+            self.onLog?("No frames received in \(self.encodingProbeInterval)s — switching to UTF-16LE")
+            self.useUTF16LE = true
+            self.didRetryEncoding = true
+
+            // Re-send initial commands in UTF-16LE so the radio starts responding.
+            self.onLog?("Re-sending AI + ID in UTF-16LE")
+            self.writeDirect(KenwoodCAT.setAutoInformation(.onNonPersistent), fd: fd)
+            self.writeDirect("ID;", fd: fd)
+            // The keepalive timer is already running and will now send in UTF-16LE too.
+        }
+        encodingProbeTimer = timer
+        timer.resume()
+    }
+
+    private func stopEncodingProbe() {
+        encodingProbeTimer?.cancel()
+        encodingProbeTimer = nil
     }
 }
 

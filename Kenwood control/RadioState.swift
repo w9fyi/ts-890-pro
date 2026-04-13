@@ -911,7 +911,7 @@ final class RadioState {
         connectionLog.removeAll()
     }
 
-    func connect(host: String, port: Int) {
+    func connect(host: String, port: Int, radioModelHint: KenwoodRadioModel = .unknown) {
         let p = UInt16(clamping: port)
         let type = KenwoodKNS.AccountType(rawValue: knsAccountType) ?? .administrator
         persistKnsSettings(host: host, port: port, accountType: type)
@@ -921,7 +921,8 @@ final class RadioState {
         let lan = TS890Connection()
         connection = lan
         wireCallbacks()
-        lan.connect(host: host, port: p, useKnsLogin: useKnsLogin, accountType: type, adminId: adminId, adminPassword: adminPassword)
+        let needsUTF16 = radioModelHint == .ts990s
+        lan.connect(host: host, port: p, useKnsLogin: useKnsLogin, accountType: type, adminId: adminId, adminPassword: adminPassword, preferUTF16LE: needsUTF16)
         connectionStatus = ConnectionStatus.connecting.rawValue
     }
 
@@ -957,7 +958,7 @@ final class RadioState {
         guard let host = KNSSettings.loadLastHost(), !host.isEmpty else { return }
         let port = KNSSettings.loadLastPort() ?? 60000
         loadSavedCredentials(host: host)
-        connect(host: host, port: port)
+        connect(host: host, port: port, radioModelHint: radioModel)
     }
 
     /// Cycle through available NR backends in order.

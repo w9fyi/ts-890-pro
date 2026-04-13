@@ -250,9 +250,9 @@ final class KenwoodCapabilitiesTests: XCTestCase {
 
     // MARK: - New multi-radio capability flags
 
-    func testKNS_onlyTS890S() {
+    func testKNS_LANRadios() {
         XCTAssertTrue(caps(.ts890s).hasKNS)
-        XCTAssertFalse(caps(.ts990s).hasKNS, "TS-990S has proprietary LAN, not KNS")
+        XCTAssertTrue(caps(.ts990s).hasKNS, "TS-990S was the first KNS radio")
         XCTAssertFalse(caps(.ts590sg).hasKNS)
         XCTAssertFalse(caps(.ts590s).hasKNS)
     }

@@ -69,11 +69,24 @@ final class SerialCATConnection: CATTransport {
             tio.c_iflag = 0
             tio.c_oflag = 0
             if tcsetattr(openFd, TCSANOW, &tio) != 0 {
-                self.log("Serial: tcsetattr warning errno=\(errno) — trying IOSSIOSPEED")
-                var speed = baudRate
-                if ioctl(openFd, IOSSIOSPEED, &speed) != 0 {
-                    self.log("Serial: IOSSIOSPEED warning errno=\(errno) — proceeding at driver-default baud rate")
-                }
+                self.log("Serial: tcsetattr warning errno=\(errno)")
+            }
+
+            // Always apply IOSSIOSPEED. On macOS 26 DriverKit FTDI/CP210x drivers,
+            // tcsetattr returns 0 but silently ignores the speed, leaving the port
+            // at the driver default (typically 9600). IOSSIOSPEED is the authoritative
+            // path for USB serial adapters on macOS.
+            var speed = baudRate
+            if ioctl(openFd, IOSSIOSPEED, &speed) != 0 {
+                self.log("Serial: IOSSIOSPEED warning errno=\(errno) — proceeding at driver-default baud rate")
+            }
+
+            // Verify and log the actual configured speed for diagnostics.
+            var verify = termios()
+            if tcgetattr(openFd, &verify) == 0 {
+                let actualIn = cfgetispeed(&verify)
+                let actualOut = cfgetospeed(&verify)
+                self.log("Serial: configured ispeed=\(actualIn) ospeed=\(actualOut) (requested \(baudRate))")
             }
 
             _ = fcntl(openFd, F_SETFL, savedFlags | O_NONBLOCK)

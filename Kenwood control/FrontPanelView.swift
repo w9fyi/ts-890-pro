@@ -1146,9 +1146,42 @@ private struct TXRow: View {
         }
         .controlSize(.small)
         .sheet(isPresented: $showAudioSettings) {
-            AudioSectionView(radio: radio)
-                .frame(minWidth: 560, minHeight: 480)
+            DismissableSheet(title: "Operator Audio Settings",
+                             isPresented: $showAudioSettings) {
+                AudioSectionView(radio: radio)
+            }
+            .frame(minWidth: 560, minHeight: 520)
         }
+    }
+}
+
+// MARK: - Dismissable sheet wrapper
+//
+// Adds a Done button + Escape keyboard shortcut to any sheet contents.
+// Fixes issue #4 (trapped pop-up windows with no return option).
+private struct DismissableSheet<Content: View>: View {
+    let title: String
+    @Binding var isPresented: Bool
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        VStack(spacing: 0) {
+            content()
+            Divider()
+            HStack {
+                Spacer()
+                Button("Done") { isPresented = false }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityLabel("Close \(title)")
+            }
+            .padding(12)
+        }
+        .background(
+            Button("") { isPresented = false }
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .accessibilityHidden(true)
+        )
     }
 }
 
@@ -1169,7 +1202,9 @@ private struct MemoriesButton: View {
             .accessibilityLabel("Memory channel browser")
             .accessibilityHint("Opens memory browser. Right-click to quick-store VFO A.")
             .sheet(isPresented: $showSheet) {
-                MemoryBrowserView(radio: radio)
+                DismissableSheet(title: "Memories", isPresented: $showSheet) {
+                    MemoryBrowserView(radio: radio)
+                }
             }
             .popover(isPresented: $showQuickPopover, arrowEdge: .top) {
                 VStack(alignment: .leading, spacing: 10) {

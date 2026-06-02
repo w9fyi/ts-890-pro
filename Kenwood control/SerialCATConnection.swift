@@ -31,6 +31,15 @@ final class SerialCATConnection: CATTransport {
     private var receiveBuffer = Data()
     private var keepaliveTimer: DispatchSourceTimer?
     private let keepaliveInterval: TimeInterval = 5
+    // The AI command to re-assert in the keepalive. Defaults to AI2 (safe for unknown
+    // radios). Updated by RadioState.primeRadioAfterID() once the model is identified.
+    // Only accessed on `queue`.
+    private var aiCommand: String = KenwoodCAT.setAutoInformation(.onNonPersistent)
+
+    /// Update the AI command re-asserted by the keepalive timer. Safe to call from any thread.
+    func updateAICommand(_ cmd: String) {
+        queue.async { [weak self] in self?.aiCommand = cmd }
+    }
 
     // MARK: - Connect
 
@@ -195,9 +204,9 @@ final class SerialCATConnection: CATTransport {
             case 0: self.sendRaw(KenwoodCAT.getAFGain()); self.sendRaw(KenwoodCAT.getRFGain())
             default: self.sendRaw(KenwoodCAT.getSquelchLevel())
             }
-            // Re-assert AI4 every 30 s in case the radio reset it.
+            // Re-assert the model-correct AI command every 30 s in case the radio reset it.
             if tickCount % 6 == 5 {
-                self.sendRaw(KenwoodCAT.setAutoInformation(.onNonPersistent))
+                self.sendRaw(self.aiCommand)
             }
             tickCount += 1
         }

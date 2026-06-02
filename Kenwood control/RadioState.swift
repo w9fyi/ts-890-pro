@@ -382,6 +382,12 @@ final class RadioState {
     var connectionType: ConnectionType = .lan
     var availableSerialPorts: [SerialPort] = []
     var selectedSerialPort: String = ""
+    /// User-selectable USB CAT baud rate. Must match the radio's menu setting.
+    /// TS-890S default is 115200; TS-990S and TS-590 families may be set lower.
+    var usbBaudRate: Int = {
+        let stored = UserDefaults.standard.integer(forKey: "usbBaudRate")
+        return stored == 0 ? 115_200 : stored
+    }()
 
     // MARK: - Bandscope / Waterfall
     /// Current span in kHz from BS4 (5/10/25/50/100/200/500). Default 50.
@@ -727,20 +733,11 @@ final class RadioState {
                             self.send(KenwoodCAT.getVoipOutputLevel())
                         }
                     }
-                    // Enable Auto-Information mode: radio pushes FA/FB/OM/RIT/XIT/etc.
-                    // changes unsolicited, eliminating the need to poll those values.
-                    // TS-890S/990S: AI4 (backed up, survives reconnects).
-                    // TS-590S/SG: AI2 (non-persistent; AI4 not supported).
-                    self.send(self.capabilities.aiCommand)
-                    // Prime basic audio/rf controls and common operating params.
-                    self.send(KenwoodCAT.getAFGain())
-                    self.send(KenwoodCAT.getRFGain())
-                    self.queryTop5()
-                    // Enable bandscope streaming to LAN (high cycle) and read span
-                    if self.connectionType == .lan && self.capabilities.hasScope {
-                        self.send("DD01;")   // Output to LAN, High cycle
-                        self.queryScopeState()
-                    }
+                    // Identify the radio FIRST so capability flags (AI mode, command set)
+                    // are correct before we send anything model-specific. Without this,
+                    // a TS-990S or TS-590 gets AI4 (890-specific) and the wrong mode
+                    // commands, which silently fails and looks like flaky RX/TX.
+                    self.awaitIDThenPrimeRadio()
                     if self.cwGreetingEnabled {
                         AppFileLogger.shared.log("Morse: playing connect greeting (CQ)")
                         self.morsePlayer.play("CQ")
@@ -912,6 +909,7 @@ final class RadioState {
     }
 
     func connect(host: String, port: Int, radioModelHint: KenwoodRadioModel = .unknown) {
+        connectionGeneration &+= 1
         let p = UInt16(clamping: port)
         let type = KenwoodKNS.AccountType(rawValue: knsAccountType) ?? .administrator
         persistKnsSettings(host: host, port: port, accountType: type)
@@ -927,17 +925,20 @@ final class RadioState {
     }
 
     func connectUSB(portPath: String) {
+        connectionGeneration &+= 1
         connectionType = .usb
         currentSerialPort = portPath
+        UserDefaults.standard.set(usbBaudRate, forKey: "usbBaudRate")
         DiagnosticsStore.shared.lastError = nil
         let serial = SerialCATConnection()
         connection = serial
         wireCallbacks()
-        serial.connect(portPath: portPath)
+        serial.connect(portPath: portPath, baudRate: speed_t(usbBaudRate))
         connectionStatus = ConnectionStatus.connecting.rawValue
     }
 
     func disconnect() {
+        connectionGeneration &+= 1
         if cwGreetingEnabled {
             AppFileLogger.shared.log("Morse: playing disconnect farewell (73)")
             morsePlayer.play("73")
@@ -1104,6 +1105,80 @@ final class RadioState {
         if !audioOutputDevices.isEmpty {
             let names = audioOutputDevices.prefix(10).map { "\($0.name) uid=\($0.uid)" }.joined(separator: " | ")
             AppFileLogger.shared.log("Audio outputs (first 10): \(names)")
+        }
+    }
+
+    // MARK: - ID-first handshake
+    //
+    // Problem: connect-time command burst (AI4, 30+ queries) was fired before the
+    // radio model was known. On a TS-990S or TS-590 this meant we sent TS-890S
+    // commands (wrong AI mode, wrong mode-query command) — radio silently ignored
+    // most of it and the user saw intermittent TX/RX (issue #3).
+    //
+    // Fix: send ID; immediately, wait up to 2 seconds for the response to update
+    // capabilities, then send the AI command + full query sweep. If no ID reply
+    // arrives (e.g. wrong baud, cable, or port), fall back to the default capability
+    // set after the timeout so connection isn't blocked forever.
+    private func awaitIDThenPrimeRadio() {
+        let identifiedGeneration = radioModelGeneration
+        let capturedConnGen = connectionGeneration
+        send("ID;")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            // Drop stale closure if a new connect/disconnect has occurred since this
+            // handshake was started.
+            guard self.connectionGeneration == capturedConnGen else { return }
+            // If ID response already updated capabilities, prime immediately.
+            if self.radioModelGeneration != identifiedGeneration {
+                self.primeRadioAfterID()
+                return
+            }
+            // Otherwise retry ID; once more in case the first was lost in a pile
+            // of outbound queries (Kenwood radios can miss the first command on
+            // some USB adapters right after the port opens).
+            self.send("ID;")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self else { return }
+                // Drop stale closure if the session changed during the retry window.
+                guard self.connectionGeneration == capturedConnGen else { return }
+                if self.radioModelGeneration == identifiedGeneration {
+                    AppFileLogger.shared.log(
+                        "ID timeout — proceeding with default \(self.radioModel) capabilities. " +
+                        "If this is a TS-990S or TS-590, check USB CAT baud rate in the radio menu."
+                    )
+                }
+                self.primeRadioAfterID()
+            }
+        }
+    }
+
+    /// Monotonic counter bumped whenever radioModel changes. Used by the ID
+    /// handshake to detect that an ID response arrived.
+    private var radioModelGeneration: Int = 0
+
+    /// Monotonic counter bumped on every connect AND disconnect. Captured at the
+    /// start of awaitIDThenPrimeRadio so stale closures from a previous session
+    /// are silently dropped instead of firing primeRadioAfterID into a new session.
+    private var connectionGeneration: Int = 0
+
+    private func primeRadioAfterID() {
+        // Enable Auto-Information mode: radio pushes FA/FB/OM/RIT/XIT/etc.
+        // changes unsolicited, eliminating the need to poll those values.
+        // TS-890S/990S: AI4 (backed up, survives reconnects).
+        // TS-590S/SG: AI2 (non-persistent; AI4 not supported).
+        send(capabilities.aiCommand)
+        // Keep the serial keepalive in sync so it re-asserts the model-correct AI
+        // command rather than always falling back to AI2.
+        if let serial = connection as? SerialCATConnection {
+            serial.updateAICommand(capabilities.aiCommand)
+        }
+        send(KenwoodCAT.getAFGain())
+        send(KenwoodCAT.getRFGain())
+        queryTop5()
+        if connectionType == .lan && capabilities.hasScope {
+            send("DD01;")
+            queryScopeState()
         }
     }
 
@@ -1657,9 +1732,8 @@ final class RadioState {
         case .amData:               previousModeBeforeFreeDV = .am
         default:                    previousModeBeforeFreeDV = modeSnapshot
         }
-        // Always restore to front mic — if txAudioSource is .usbPassthrough (e.g. from
-        // WSJT-X), restoring that on FreeDV exit would leave USB audio active unexpectedly.
-        previousTxAudioSourceBeforeFreeDV = .hardware
+        // Save the real TX audio source so we can restore it exactly on exit.
+        previousTxAudioSourceBeforeFreeDV = txAudioSource
 
         // Switch radio to USB-DATA.
         send("OM0D;")
@@ -1772,7 +1846,10 @@ final class RadioState {
         // Restore previous radio mode and TX audio source.
         let revertMode = previousModeBeforeFreeDV ?? .usb
         setOperatingMode(revertMode)
-        setTXAudioSource(previousTxAudioSourceBeforeFreeDV ?? .hardware)
+
+        // Restore the TX audio source that was active before FreeDV was enabled.
+        let restoredSource = previousTxAudioSourceBeforeFreeDV ?? .hardware
+        setTXAudioSource(restoredSource)
         previousModeBeforeFreeDV = nil
         previousTxAudioSourceBeforeFreeDV = nil
 
@@ -1783,7 +1860,7 @@ final class RadioState {
         freedvTotalBits       = 0
         freedvTotalBitErrors  = 0
         freedvRxStatus        = 0
-        AppFileLogger.shared.log("FreeDV: deactivated, restored \(revertMode.label)")
+        AppFileLogger.shared.log("FreeDV: deactivated, restored \(revertMode.label), audio=\(restoredSource.rawValue)")
     }
 
     private func postRadioNotification(title: String, body: String) {
@@ -2189,6 +2266,9 @@ final class RadioState {
                     stopLanAudio()
                 }
             }
+            // Bump the generation even when newModel == radioModel so that the
+            // ID-first handshake can distinguish "ID round-tripped" from "silence".
+            radioModelGeneration &+= 1
             return
         }
 
@@ -3020,7 +3100,7 @@ final class RadioState {
             AppFileLogger.shared.logSync("PTT: ignored (already in requested state)")
             return
         }
-        guard !currentHost.isEmpty else {
+        guard !currentHost.isEmpty || connectionType == .usb else {
             AppFileLogger.shared.logSync("PTT: blocked (no host set)")
             announceError("No radio host set")
             return

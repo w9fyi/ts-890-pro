@@ -1847,9 +1847,26 @@ final class RadioState {
         let revertMode = previousModeBeforeFreeDV ?? .usb
         setOperatingMode(revertMode)
 
-        // Restore the TX audio source that was active before FreeDV was enabled.
-        let restoredSource = previousTxAudioSourceBeforeFreeDV ?? .hardware
-        setTXAudioSource(restoredSource)
+        // Restore the rear-connector / TX audio routing.
+        // Never re-enable USB passthrough on FreeDV exit: a stray passthrough
+        // source (e.g. left over from WSJT-X) would silently reroute transmit
+        // audio to a USB feed. Fall back to the front microphone instead.
+        var restoredSource = previousTxAudioSourceBeforeFreeDV ?? .hardware
+        if restoredSource == .usbPassthrough { restoredSource = .hardware }
+        if isLanAudioRunning {
+            // KNS LAN audio is still active. Restore Rear=LAN (MS003) so the
+            // connection keeps carrying audio — not MS010 (Rear off), which
+            // would silently break KNS. USB TX passthrough is incompatible with
+            // the LAN path, so ensure it's stopped and settle the source state
+            // on .hardware without emitting MS010.
+            stopTXPassthrough()
+            txAudioSource = .hardware
+            UserDefaults.standard.set(TXAudioSource.hardware.rawValue, forKey: txAudioSourceKey)
+            send("MS003;")  // SEND/PTT (P1=0), Front=OFF (P2=0), Rear=LAN (P3=3)
+        } else {
+            // No LAN audio: restore the TX audio source that was active before FreeDV.
+            setTXAudioSource(restoredSource)
+        }
         previousModeBeforeFreeDV = nil
         previousTxAudioSourceBeforeFreeDV = nil
 

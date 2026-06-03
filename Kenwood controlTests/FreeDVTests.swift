@@ -562,6 +562,32 @@ final class RadioStateFreeDVTests: XCTestCase {
                        "Deactivate must NOT restore OM0D; (USB-DATA), got \(sentCommands)")
     }
 
+    func testDeactivate_whenLanAudioWasRunning_restoresMS003() {
+        // If LAN audio was running before FreeDV, deactivation must restore
+        // MS003 (Rear=LAN) so the KNS connection keeps working — not MS010.
+        radio.isLanAudioRunning = true
+        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        DiagnosticsStore.shared.txLog = []
+        radio.deactivateFreeDV()
+        XCTAssertTrue(sentCommands.contains("MS003;"),
+                      "Deactivate must restore MS003; (LAN audio) when KNS was active, got \(sentCommands)")
+        XCTAssertFalse(sentCommands.contains("MS010;"),
+                       "Deactivate must NOT send MS010; when restoring to LAN, got \(sentCommands)")
+    }
+
+    func testDeactivate_whenLanAudioStoppedDuringFreeDV_restoresToMic() {
+        // LAN audio was running on entry but was stopped during FreeDV — fall back to mic.
+        radio.isLanAudioRunning = true
+        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.isLanAudioRunning = false   // simulates user stopping LAN audio
+        DiagnosticsStore.shared.txLog = []
+        radio.deactivateFreeDV()
+        XCTAssertTrue(sentCommands.contains("MS010;"),
+                      "Deactivate must restore MS010; when LAN audio stopped during FreeDV, got \(sentCommands)")
+        XCTAssertFalse(sentCommands.contains("MS003;"),
+                       "Deactivate must NOT send MS003; when LAN is no longer running, got \(sentCommands)")
+    }
+
     func testDeactivate_whenTxAudioWasUSBPassthrough_restoresToHardwareMic() {
         // If txAudioSource was .usbPassthrough before FreeDV (e.g., leftover from WSJT-X),
         // deactivation must still restore to front mic (MS010;), not USB passthrough (MS002;).

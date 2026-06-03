@@ -66,9 +66,25 @@ private struct ConnectionSectionView: View {
                         }
 
                         HStack(spacing: 12) {
+                            Text("Baud Rate:")
+                            Picker("Baud rate", selection: $radio.usbBaudRate) {
+                                Text("4800").tag(4_800)
+                                Text("9600").tag(9_600)
+                                Text("19200").tag(19_200)
+                                Text("38400").tag(38_400)
+                                Text("57600").tag(57_600)
+                                Text("115200").tag(115_200)
+                            }
+                            .labelsHidden()
+                            .frame(width: 140)
+                            .accessibilityLabel("USB CAT baud rate")
+                            .accessibilityHint("Must match the radio's USB CAT baud menu setting. TS-890S default is 115200.")
+                        }
+
+                        HStack(spacing: 12) {
                             Button("Connect") {
                                 guard !radio.selectedSerialPort.isEmpty else { return }
-                                AppFileLogger.shared.log("UI: USB Connect pressed port=\(radio.selectedSerialPort)")
+                                AppFileLogger.shared.log("UI: USB Connect pressed port=\(radio.selectedSerialPort) baud=\(radio.usbBaudRate)")
                                 radio.connectUSB(portPath: radio.selectedSerialPort)
                             }
                             Button("Disconnect") { radio.disconnect() }
@@ -1068,6 +1084,9 @@ struct AudioSectionView: View {
                 }
                 .frame(minWidth: 360)
                 .accessibilityLabel("Microphone input device")
+                .accessibilityRepresentation {
+                    Button("Microphone: \(radio.selectedLanMicInputUID.isEmpty ? "system default" : "custom")") {}
+                }
 
                 Text(radio.selectedLanMicInputUID.isEmpty ? "(default)" : "custom")
                     .font(.system(.body, design: .monospaced))
@@ -1090,6 +1109,7 @@ struct AudioSectionView: View {
                     TextField("0-100", text: $voipOutString)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 90)
+                        .accessibilityLabel("VoIP output volume, 0 to 100")
                         .onSubmit {
                             let v = Int(voipOutString) ?? 0
                             radio.setVoipOutputLevel(v)
@@ -1097,6 +1117,7 @@ struct AudioSectionView: View {
 
                     Text(radio.voipOutputLevel != nil ? "\(radio.voipOutputLevel!)" : "n/a")
                         .font(.system(.body, design: .monospaced))
+                        .accessibilityHidden(true)
                 }
                 Text("Adjusting the slider applies automatically.")
                     .font(.footnote)
@@ -1120,6 +1141,7 @@ struct AudioSectionView: View {
                     TextField("0-100", text: $voipInString)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 90)
+                        .accessibilityLabel("VoIP mic input level, 0 to 100")
                         .onSubmit {
                             let v = Int(voipInString) ?? 0
                             radio.setVoipInputLevel(v)
@@ -1127,6 +1149,7 @@ struct AudioSectionView: View {
 
                     Text(radio.voipInputLevel != nil ? "\(radio.voipInputLevel!)" : "n/a")
                         .font(.system(.body, design: .monospaced))
+                        .accessibilityHidden(true)
                 }
                 Text("Adjusting the slider applies automatically.")
                     .font(.footnote)
@@ -1161,6 +1184,9 @@ struct AudioSectionView: View {
                 }
                 .frame(minWidth: 360)
                 .accessibilityLabel("Mac speaker output device")
+                .accessibilityRepresentation {
+                    Button("Speaker output: \(radio.selectedLanAudioOutputUID.isEmpty ? "system default" : "custom")") {}
+                }
                 .onChange(of: radio.selectedLanAudioOutputUID) { _, newUID in
                     AppFileLogger.shared.log("UI: LAN output selection uid=\(newUID.isEmpty ? "(default)" : newUID)")
                     radio.applyLanAudioOutputSelection()
@@ -1184,6 +1210,7 @@ struct AudioSectionView: View {
                 Text(String(format: "%.2f", radio.lanAudioOutputGain))
                     .font(.system(.body, design: .monospaced))
                     .frame(width: 64, alignment: .trailing)
+                    .accessibilityHidden(true)
             }
 
             if let err = radio.lanAudioError {
@@ -1224,6 +1251,9 @@ struct AudioSectionView: View {
                 }
                 .frame(minWidth: 240)
                 .accessibilityLabel("Noise reduction profile")
+                .accessibilityRepresentation {
+                    Button("NR profile: \(radio.noiseReductionProfileRaw)") {}
+                }
 
                 HStack(spacing: 12) {
                     Text("NR Strength")

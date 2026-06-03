@@ -2,12 +2,23 @@ import Foundation
 import Security
 
 enum KeychainStore {
+    /// True when the process is hosted by the XCTest harness. Used to skip
+    /// keychain reads during tests: the test host is re-signed on every build,
+    /// so it never matches the keychain item's access list and would otherwise
+    /// trigger a blocking "wants to use the keychain" prompt that hangs the
+    /// test runner. Real app launches are unaffected.
+    private static let isRunningUnderXCTest =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     static func setPassword(_ password: String, service: String, account: String) throws {
         let data = Data(password.utf8)
         try upsert(data: data, service: service, account: account)
     }
 
     static func getPassword(service: String, account: String) throws -> String? {
+        // Under XCTest, behave as if no password is stored — see note above.
+        if isRunningUnderXCTest { return nil }
+
         let query: [String: Any] = [
             kSecClass as String:      kSecClassGenericPassword,
             kSecAttrService as String: service,

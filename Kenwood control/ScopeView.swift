@@ -33,15 +33,10 @@ struct ScopeView: View {
                         drawCenterMarker(ctx: ctx, size: size)
                         drawFreqAxis(ctx: ctx, size: size)
                     }
+                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Band scope spectrum")
                     .accessibilityValue(spectrumAccessibilityValue)
-                    .accessibilityChildren {
-                        ForEach(spectrumSegments) { seg in
-                            Rectangle()
-                                .accessibilityLabel(seg.freqLabel)
-                                .accessibilityValue(seg.levelLabel)
-                        }
-                    }
+                    .accessibilityAddTraits([.isImage, .updatesFrequently])
 
                     // Scope controls overlay (top)
                     VStack(spacing: 0) {
@@ -204,11 +199,15 @@ struct ScopeView: View {
                 Text("Span: \(spanKHz) kHz")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(KenwoodTheme.amber)
+                    .accessibilityHidden(true)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
             .accessibilityLabel("Scope span")
             .accessibilityValue("\(spanKHz) kilohertz")
+            .accessibilityRepresentation {
+                Button("Scope span: \(spanKHz) kHz") {}
+            }
 
             scopeDivider
 
@@ -221,11 +220,15 @@ struct ScopeView: View {
                 Text(radio.scopeMode.label)
                     .font(.system(size: 10))
                     .foregroundColor(KenwoodTheme.amberDim)
+                    .accessibilityHidden(true)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
             .accessibilityLabel("Scope mode")
             .accessibilityValue(radio.scopeMode.label)
+            .accessibilityRepresentation {
+                Button("Scope mode: \(radio.scopeMode.label)") {}
+            }
 
             scopeDivider
 
@@ -249,6 +252,7 @@ struct ScopeView: View {
                 Image(systemName: radio.scopePaused ? "play.fill" : "pause.fill")
                     .font(.system(size: 9))
                     .foregroundColor(radio.scopePaused ? KenwoodTheme.amber : KenwoodTheme.labelSecondary)
+                    .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(radio.scopePaused ? "Resume scope" : "Pause scope")
@@ -260,6 +264,7 @@ struct ScopeView: View {
                 Image(systemName: "gearshape")
                     .font(.system(size: 10))
                     .foregroundColor(KenwoodTheme.labelSecondary)
+                    .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Scope settings")
@@ -401,36 +406,28 @@ struct ScopeView: View {
     }
 
     private var spectrumAccessibilityValue: String {
-        guard !engine.currentPoints.isEmpty else { return "No data" }
-        let peak = engine.currentPoints.min() ?? 0x8C
-        let dbVal = Int(Double(peak) / Double(0x8C) * -100)
-        return "Peak signal \(dbVal) dB, span \(spanKHz) kHz, mode \(radio.scopeMode.label)"
-    }
-
-    private struct SpectrumSegment: Identifiable {
-        let id: Int
-        let freqLabel: String
-        let levelLabel: String
-    }
-
-    private var spectrumSegments: [SpectrumSegment] {
-        guard let center = centerHz, !engine.currentPoints.isEmpty else { return [] }
-        let points = engine.currentPoints
-        let count  = points.count
-        let n      = 5
-        return (0..<n).map { i in
-            let lo  = i * count / n
-            let hi  = Swift.min((i + 1) * count / n, count)
-            let slice = points[lo..<hi]
-            let avg = slice.isEmpty ? UInt8(0x8C)
-                : UInt8(slice.reduce(0) { $0 + Int($1) } / slice.count)
-            let db  = Int(Double(avg) / Double(0x8C) * -100)
-
-            let spanHz   = Double(spanKHz) * 1_000.0
-            let loFreqMHz = (Double(center) + (Double(i)     / Double(n) - 0.5) * spanHz) / 1_000_000
-            let hiFreqMHz = (Double(center) + (Double(i + 1) / Double(n) - 0.5) * spanHz) / 1_000_000
-            let freqLabel = String(format: "%.3f to %.3f MHz", loFreqMHz, hiFreqMHz)
-            return SpectrumSegment(id: i, freqLabel: freqLabel, levelLabel: "\(db) dB")
+        guard let center = centerHz, !engine.currentPoints.isEmpty else {
+            return "No data, span \(spanKHz) kHz, mode \(radio.scopeMode.label)"
         }
+        let points  = engine.currentPoints
+        let count   = points.count
+        let n       = 5
+        let spanHz  = Double(spanKHz) * 1_000.0
+        var parts   = [String]()
+        for i in 0..<n {
+            let lo    = i * count / n
+            let hi    = Swift.min((i + 1) * count / n, count)
+            let slice = points[lo..<hi]
+            let sum   = slice.reduce(0) { $0 + Int($1) }
+            let avg   = slice.isEmpty ? UInt8(0x8C) : UInt8(sum / slice.count)
+            let db    = Int(Double(avg) / Double(0x8C) * -100)
+            let mid   = (Double(center) + ((Double(i) + 0.5) / Double(n) - 0.5) * spanHz) / 1_000_000
+            parts.append(String(format: "%.3f MHz: %d dB", mid, db))
+        }
+        let peak    = points.min() ?? 0x8C
+        let peakDb  = Int(Double(peak) / Double(0x8C) * -100)
+        let segs    = parts.joined(separator: ", ")
+        return "Peak \(peakDb) dB, span \(spanKHz) kHz, mode \(radio.scopeMode.label). Segments: \(segs)"
     }
+
 }

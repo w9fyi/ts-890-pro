@@ -1,27 +1,19 @@
 import Foundation
 
 /// Minimal always-on file logger for VoiceOver-friendly debugging.
-/// Writes to /tmp so it works with the App Sandbox without extra entitlements.
 final class AppFileLogger {
 
     nonisolated deinit {}
     static let shared = AppFileLogger()
 
     private let queue = DispatchQueue(label: "AppFileLogger.queue")
-    // Prefer the sandbox container so this works under the App Sandbox.
-    // Example:
-    // ~/Library/Containers/personal.Kenwood-control/Data/Library/Logs/kenwood-control.log
     private let url: URL = {
-        // Prefer a user-accessible location when permitted by entitlements.
-        // We enable Downloads read/write so VoiceOver users can inspect logs without Console.app.
-        if let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
-            // Keep it next to the project folder by default.
-            return downloads.appendingPathComponent("Kenwood control/kenwood-control.log")
+        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            return appSupport.appendingPathComponent("TS-890 Pro/kenwood-control.log")
         }
 
-        // Fallback: sandbox container.
         let home = URL(fileURLWithPath: NSHomeDirectory())
-        return home.appendingPathComponent("Library/Logs/kenwood-control.log")
+        return home.appendingPathComponent("Library/Application Support/TS-890 Pro/kenwood-control.log")
     }()
     private let maxBytes: Int = 5 * 1024 * 1024
     private let keepTailBytes: Int = 1 * 1024 * 1024

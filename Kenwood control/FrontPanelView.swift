@@ -112,6 +112,12 @@ struct FrontPanelView: View {
 
             Divider()
 
+            TuningStepRow(radio: radio)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+
+            Divider()
+
             ControlsRow(radio: radio)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
@@ -940,6 +946,85 @@ private struct VFORow: View {
     }
 }
 
+// MARK: - Tune step row (between VFO and Controls)
+//
+// Compact step picker + Up/Down buttons for VFO A. Mirrors the floating
+// Tuning Panel's behavior so the most common task (nudge VFO A by N Hz)
+// doesn't require opening a second window. Selection persists across
+// launches via TuningPreferences.shared and is also driven by the
+// .cycleVfoStep MIDI button action.
+
+private struct TuningStepRow: View {
+    let radio: RadioState
+    @Bindable private var prefs = TuningPreferences.shared
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("Tune VFO A:")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .accessibilityHidden(true)
+
+            Picker("Tuning step", selection: $prefs.step) {
+                ForEach(MIDITuningStep.allCases) { step in
+                    Text(step.label).tag(step)
+                }
+            }
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .frame(width: 110)
+            // The representation below already names the control and its value;
+            // a separate .accessibilityLabel here would be dead (representation
+            // overrides it), so it's omitted to avoid a doubled label.
+            .accessibilityRepresentation {
+                Button("Tuning step: \(prefs.step.label)") {}
+            }
+
+            Button {
+                tune(by: -prefs.step.rawValue)
+            } label: {
+                Image(systemName: "minus.circle")
+                    .accessibilityHidden(true)
+            }
+            .buttonStyle(CompactButtonStyle())
+            .accessibilityLabel("Tune VFO A down by \(prefs.step.label)")
+
+            Button {
+                tune(by: prefs.step.rawValue)
+            } label: {
+                Image(systemName: "plus.circle")
+                    .accessibilityHidden(true)
+            }
+            .buttonStyle(CompactButtonStyle())
+            .accessibilityLabel("Tune VFO A up by \(prefs.step.label)")
+
+            Spacer()
+        }
+    }
+
+    private func tune(by hz: Int) {
+        guard let current = radio.vfoAFrequencyHz else { return }
+        let newHz = max(0, min(current + hz, 999_999_999))
+        radio.send(KenwoodCAT.setVFOAFrequencyHz(newHz))
+        announceFrequency(newHz)
+    }
+
+    /// Speak the new VFO A frequency so a VoiceOver user gets immediate
+    /// confirmation after a button nudge (the on-screen readout updates
+    /// silently otherwise). Mirrors the MHz format of the main frequency display.
+    private func announceFrequency(_ hz: Int) {
+        let mhz = String(format: "%.6f", Double(hz) / 1_000_000.0)
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [
+                NSAccessibility.NotificationUserInfoKey.announcement: "\(mhz) megahertz",
+                NSAccessibility.NotificationUserInfoKey.priority: NSAccessibilityPriorityLevel.high,
+            ]
+        )
+    }
+}
+
 // MARK: - Row 4: Controls row
 // Subscribes to: rfGain, afGain, squelchLevel, micGain, operatingMode,
 //   ritEnabled, xitEnabled, ritXitOffsetHz.
@@ -1493,6 +1578,7 @@ private struct MetersStripRow: View {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
+                    .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(expanded ? "Collapse meters" : "Expand meters")
@@ -1752,10 +1838,10 @@ private struct InlineMeterBar: View {
             }
             .frame(height: 8)
         }
-        .accessibilityRepresentation {
-            ProgressView(value: value, total: 1.0)
-                .accessibilityLabel(Text(label))
-        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(String(format: "%.0f%%", value * 100))
+        .accessibilityAddTraits([.isImage, .updatesFrequently])
     }
 }
 

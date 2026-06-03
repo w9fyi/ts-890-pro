@@ -414,7 +414,42 @@ final class RadioState {
 
     // MARK: - FreeDV state
     enum FreeDVAudioPath: String, CaseIterable { case lan = "LAN (KNS)", usb = "USB Audio" }
+
+    /// Unified picker choice: the neural RADE mode (default on-air FreeDV HF
+    /// voice) or one of the legacy codec2 modes. RADE is receive-only here.
+    enum FreeDVModeChoice: Hashable, Identifiable, CaseIterable {
+        case rade
+        case codec2(FreeDVEngine.Mode)
+
+        static var allCases: [FreeDVModeChoice] {
+            [.rade] + FreeDVEngine.Mode.allCases.map(FreeDVModeChoice.codec2)
+        }
+        var id: String {
+            switch self {
+            case .rade:            return "rade"
+            case .codec2(let m):   return "codec2_\(m.rawValue)"
+            }
+        }
+        var label: String {
+            switch self {
+            case .rade:            return "RADE"
+            case .codec2(let m):   return m.label
+            }
+        }
+        var details: String {
+            switch self {
+            case .rade:            return "Neural voice · default on-air FreeDV HF mode (receive only)"
+            case .codec2(let m):   return m.details
+            }
+        }
+        var isRADE: Bool { if case .rade = self { return true }; return false }
+    }
+
     var freedvIsActive:        Bool   = false
+    /// RADE is the default — it's the dominant on-air FreeDV HF voice mode.
+    var freedvModeChoice:      FreeDVModeChoice = .rade
+    /// True while the active decoder is RADE (no TX, no BER stats).
+    private(set) var freedvIsRADE: Bool = false
     var freedvMode:            FreeDVEngine.Mode = .mode700D
     var freedvAudioPath:       FreeDVAudioPath = .lan
     var freedvSync:            Bool   = false
@@ -496,6 +531,7 @@ final class RadioState {
 
     // FreeDV
     private let freedvEngine = FreeDVEngine()
+    private let radeEngine = RADEEngine()
     private var freedvLanRxPipeline: FreeDVLanRxPipeline?
     private var freedvLanTxPipeline: FreeDVLanTxPipeline?
     private var freedvUsbPipeline: FreeDVUsbPipeline?
@@ -632,6 +668,11 @@ final class RadioState {
         if let rawMode = UserDefaults.standard.object(forKey: "freedv_mode") as? Int,
            let savedMode = FreeDVEngine.Mode(rawValue: Int32(rawMode)) {
             freedvMode = savedMode
+        }
+        // Restore the unified mode choice (defaults to RADE if absent/unknown).
+        if let savedChoice = UserDefaults.standard.string(forKey: "freedv_mode_choice"),
+           let choice = FreeDVModeChoice.allCases.first(where: { $0.id == savedChoice }) {
+            freedvModeChoice = choice
         }
         if let rawPath = UserDefaults.standard.string(forKey: "freedv_audio_path"),
            let savedPath = FreeDVAudioPath(rawValue: rawPath) {
@@ -1717,8 +1758,9 @@ final class RadioState {
 
     // MARK: - FreeDV activation
 
-    func activateFreeDV(mode: FreeDVEngine.Mode, audioPath: FreeDVAudioPath) {
+    func activateFreeDV(choice: FreeDVModeChoice, audioPath: FreeDVAudioPath) {
         guard !freedvIsActive else { return }
+        let isRADE = choice.isRADE
 
         // Save the current mode and TX audio source so we can restore them on deactivate.
         // Normalize data modes to their voice equivalents — if the radio is already in
@@ -1738,41 +1780,75 @@ final class RadioState {
         // Switch radio to USB-DATA.
         send("OM0D;")
 
-        // Open the codec2 FreeDV engine.
-        freedvEngine.open(mode: mode)
-        freedvEngine.txCallsign = freedvTxCallsign
-        freedvEngine.onStatsUpdate = { [weak self] sync, snr, ber, tb, tbe, status in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                let wasSync = self.freedvSync
-                self.freedvSync            = sync
-                self.freedvSnrDB           = snr
-                self.freedvBer             = ber
-                self.freedvTotalBits       = tb
-                self.freedvTotalBitErrors  = tbe
-                self.freedvRxStatus        = status
-                if sync && !wasSync {
-                    self.announceInfo("FreeDV synchronized, SNR \(Int(snr)) dB")
-                } else if !sync && wasSync {
-                    self.announceInfo("FreeDV sync lost")
+        // Open the decoder for the selected mode.
+        if isRADE {
+            // RADE (neural voice) — receive only.
+            radeEngine.open()
+            radeEngine.onStatsUpdate = { [weak self] sync, snr, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    let wasSync = self.freedvSync
+                    self.freedvSync           = sync
+                    self.freedvSnrDB          = Float(snr)
+                    self.freedvBer            = 0
+                    self.freedvTotalBits      = 0
+                    self.freedvTotalBitErrors = 0
+                    if sync && !wasSync {
+                        self.announceInfo("RADE synchronized, SNR \(snr) dB")
+                    } else if !sync && wasSync {
+                        self.announceInfo("RADE sync lost")
+                    }
+                }
+            }
+            radeEngine.onCallsignReceived = { [weak self] callsign in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.freedvReceivedText.append("[\(callsign)] ")
+                    if self.freedvReceivedText.count > 500 {
+                        self.freedvReceivedText = String(self.freedvReceivedText.suffix(500))
+                    }
+                    self.announceInfo("RADE station \(callsign)")
+                }
+            }
+        } else if case .codec2(let mode) = choice {
+            freedvEngine.open(mode: mode)
+            freedvEngine.txCallsign = freedvTxCallsign
+            freedvEngine.onStatsUpdate = { [weak self] sync, snr, ber, tb, tbe, status in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    let wasSync = self.freedvSync
+                    self.freedvSync            = sync
+                    self.freedvSnrDB           = snr
+                    self.freedvBer             = ber
+                    self.freedvTotalBits       = tb
+                    self.freedvTotalBitErrors  = tbe
+                    self.freedvRxStatus        = status
+                    if sync && !wasSync {
+                        self.announceInfo("FreeDV synchronized, SNR \(Int(snr)) dB")
+                    } else if !sync && wasSync {
+                        self.announceInfo("FreeDV sync lost")
+                    }
+                }
+            }
+            freedvEngine.onTextReceived = { [weak self] char in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.freedvReceivedText.append(char)
+                    if self.freedvReceivedText.count > 500 {
+                        self.freedvReceivedText = String(self.freedvReceivedText.suffix(500))
+                    }
                 }
             }
         }
-        freedvEngine.onTextReceived = { [weak self] char in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.freedvReceivedText.append(char)
-                if self.freedvReceivedText.count > 500 {
-                    self.freedvReceivedText = String(self.freedvReceivedText.suffix(500))
-                }
-            }
-        }
+
+        // Decoder used by the RX pipelines (RADE or codec2).
+        let decoder: FreeDVDecoding = isRADE ? radeEngine : freedvEngine
 
         if audioPath == .lan {
             // LAN (KNS) audio path.
             send("MS003;") // Rear = LAN (KNS audio carries modem tones)
 
-            let rxPipe = FreeDVLanRxPipeline(decoder: freedvEngine)
+            let rxPipe = FreeDVLanRxPipeline(decoder: decoder)
             rxPipe.onAudio48kMono = { [weak self] samples in
                 self?.lanPlayer?.enqueue48kMono(samples)
             }
@@ -1783,7 +1859,8 @@ final class RadioState {
                 startLanAudio(host: currentHost)
             }
 
-            if let receiver = lanReceiver {
+            // RADE is receive-only — no TX pipeline.
+            if !isRADE, let receiver = lanReceiver {
                 let txPipe = FreeDVLanTxPipeline(engine: freedvEngine, receiver: receiver)
                 txPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV TX: \(msg)") }
                 txPipe.onError = { [weak self] msg in
@@ -1801,12 +1878,14 @@ final class RadioState {
                 .first { $0.name.localizedCaseInsensitiveContains("USB Audio CODEC") }
             guard let usbID = usbInfo.map(\.id) else {
                 freedvError = "USB Audio CODEC device not found — connect TS-890S USB cable"
-                freedvEngine.close()
+                if isRADE { radeEngine.close() } else { freedvEngine.close() }
                 return
             }
             let speakerID = AudioDeviceManager.defaultOutputDeviceID() ?? AudioDeviceID(kAudioObjectSystemObject)
 
-            let usbPipe = FreeDVUsbPipeline(engine: freedvEngine)
+            // RADE: receive-only USB pipeline (TX path disabled).
+            let usbPipe = isRADE ? FreeDVUsbPipeline(radeDecoder: radeEngine)
+                                 : FreeDVUsbPipeline(engine: freedvEngine)
             usbPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV USB: \(msg)") }
             usbPipe.onError = { [weak self] msg in
                 DispatchQueue.main.async { self?.freedvError = msg }
@@ -1816,18 +1895,23 @@ final class RadioState {
                 freedvUsbPipeline = usbPipe
             } catch {
                 freedvError = "FreeDV USB pipeline: \(error.localizedDescription)"
-                freedvEngine.close()
+                if isRADE { radeEngine.close() } else { freedvEngine.close() }
                 return
             }
         }
 
-        freedvMode      = mode
-        freedvAudioPath = audioPath
-        freedvIsActive  = true
-        freedvError     = nil
-        UserDefaults.standard.set(mode.rawValue, forKey: "freedv_mode")
+        freedvModeChoice = choice
+        freedvIsRADE     = isRADE
+        if case .codec2(let mode) = choice { freedvMode = mode }
+        freedvAudioPath  = audioPath
+        freedvIsActive   = true
+        freedvError      = nil
+        UserDefaults.standard.set(choice.id, forKey: "freedv_mode_choice")
+        if case .codec2(let mode) = choice {
+            UserDefaults.standard.set(mode.rawValue, forKey: "freedv_mode")
+        }
         UserDefaults.standard.set(audioPath.rawValue, forKey: "freedv_audio_path")
-        AppFileLogger.shared.log("FreeDV: activated mode=\(mode.label) path=\(audioPath.rawValue)")
+        AppFileLogger.shared.log("FreeDV: activated mode=\(choice.label) path=\(audioPath.rawValue)")
     }
 
     func deactivateFreeDV() {
@@ -1842,6 +1926,7 @@ final class RadioState {
         freedvUsbPipeline?.stop()
         freedvUsbPipeline   = nil
         freedvEngine.close()
+        radeEngine.close()
 
         // Restore previous radio mode and TX audio source.
         let revertMode = previousModeBeforeFreeDV ?? .usb
@@ -1871,6 +1956,7 @@ final class RadioState {
         previousTxAudioSourceBeforeFreeDV = nil
 
         freedvIsActive        = false
+        freedvIsRADE          = false
         freedvSync            = false
         freedvSnrDB           = 0
         freedvBer             = 0

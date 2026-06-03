@@ -10,15 +10,15 @@ struct FreeDVSectionView: View {
                 // MARK: - Mode & Path
                 GroupBox("FreeDV Mode") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Picker("Mode", selection: $radio.freedvMode) {
-                            ForEach(FreeDVEngine.Mode.allCases) { mode in
-                                Text("\(mode.label) — \(mode.details)").tag(mode)
+                        Picker("Mode", selection: $radio.freedvModeChoice) {
+                            ForEach(RadioState.FreeDVModeChoice.allCases) { choice in
+                                Text("\(choice.label) — \(choice.details)").tag(choice)
                             }
                         }
                         .pickerStyle(.radioGroup)
                         .disabled(radio.freedvIsActive)
                         .accessibilityLabel("FreeDV mode")
-                        .accessibilityHint(radio.freedvIsActive ? "Deactivate FreeDV to change mode" : "Select FreeDV operating mode")
+                        .accessibilityHint(radio.freedvIsActive ? "Deactivate FreeDV to change mode" : "Select FreeDV operating mode. RADE is the neural voice mode and is receive only.")
 
                         Picker("Audio path", selection: $radio.freedvAudioPath) {
                             ForEach(RadioState.FreeDVAudioPath.allCases, id: \.self) { path in
@@ -33,21 +33,23 @@ struct FreeDVSectionView: View {
                     .padding(.vertical, 4)
                 }
 
-                // MARK: - TX Callsign
-                GroupBox("TX Text Channel") {
-                    HStack {
-                        Text("Callsign:")
-                        TextField("Callsign", text: $radio.freedvTxCallsign)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 180)
-                            .onChange(of: radio.freedvTxCallsign) { _, newValue in
-                                UserDefaults.standard.set(newValue, forKey: "freedv_callsign")
-                            }
-                        Text("(transmitted in text channel)")
-                            .foregroundColor(.secondary)
-                            .font(.caption)
+                // MARK: - TX Callsign (codec2 only — RADE is receive-only)
+                if !radio.freedvModeChoice.isRADE {
+                    GroupBox("TX Text Channel") {
+                        HStack {
+                            Text("Callsign:")
+                            TextField("Callsign", text: $radio.freedvTxCallsign)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 180)
+                                .onChange(of: radio.freedvTxCallsign) { _, newValue in
+                                    UserDefaults.standard.set(newValue, forKey: "freedv_callsign")
+                                }
+                            Text("(transmitted in text channel)")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
                 }
 
                 // MARK: - Activate / Deactivate
@@ -63,12 +65,12 @@ struct FreeDVSectionView: View {
                             .accessibilityHint("Stops FreeDV mode and restores previous radio mode")
                         } else {
                             Button("Activate FreeDV") {
-                                radio.activateFreeDV(mode: radio.freedvMode, audioPath: radio.freedvAudioPath)
+                                radio.activateFreeDV(choice: radio.freedvModeChoice, audioPath: radio.freedvAudioPath)
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(radio.connectionStatus != RadioState.ConnectionStatus.connected.rawValue)
                             .accessibilityLabel("Activate FreeDV")
-                            .accessibilityHint("Switches radio to USB-DATA mode and starts FreeDV \(radio.freedvMode.label) on \(radio.freedvAudioPath.rawValue)")
+                            .accessibilityHint("Switches radio to USB-DATA mode and starts FreeDV \(radio.freedvModeChoice.label) on \(radio.freedvAudioPath.rawValue)")
                         }
 
                         if let err = radio.freedvError {
@@ -97,9 +99,11 @@ struct FreeDVSectionView: View {
                                     .monospacedDigit()
                                     .accessibilityLabel(String(format: "Signal to noise ratio %.1f decibels", radio.freedvSnrDB))
 
-                                Text(String(format: "BER %.4f", radio.freedvBer))
-                                    .monospacedDigit()
-                                    .accessibilityLabel(String(format: "Bit error rate %.4f", radio.freedvBer))
+                                if !radio.freedvIsRADE {
+                                    Text(String(format: "BER %.4f", radio.freedvBer))
+                                        .monospacedDigit()
+                                        .accessibilityLabel(String(format: "Bit error rate %.4f", radio.freedvBer))
+                                }
                             }
 
                             if radio.freedvTotalBits > 0 {
@@ -142,13 +146,23 @@ struct FreeDVSectionView: View {
                         .padding(.vertical, 4)
                     }
 
-                    // MARK: - PTT hint
-                    GroupBox("Transmit") {
-                        Text("Use Option+Space to toggle PTT. When PTT is down, your microphone audio is encoded as FreeDV \(radio.freedvMode.label) and transmitted.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityLabel("Press Option Space to toggle push-to-talk. Your microphone is encoded as FreeDV \(radio.freedvMode.label) when transmitting.")
+                    // MARK: - PTT hint (codec2 only — RADE is receive-only)
+                    if radio.freedvIsRADE {
+                        GroupBox("Transmit") {
+                            Text("RADE is receive-only in this app. Transmit is not available for the neural voice mode.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityLabel("RADE is receive only. Transmit is not available for the neural voice mode.")
+                        }
+                    } else {
+                        GroupBox("Transmit") {
+                            Text("Use Option+Space to toggle PTT. When PTT is down, your microphone audio is encoded as FreeDV \(radio.freedvMode.label) and transmitted.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityLabel("Press Option Space to toggle push-to-talk. Your microphone is encoded as FreeDV \(radio.freedvMode.label) when transmitting.")
+                        }
                     }
                 }
 

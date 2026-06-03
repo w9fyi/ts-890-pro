@@ -41,6 +41,9 @@ final class TS890Connection {
     private var currentHost: String?
     private var currentPort: UInt16 = 60000
 
+    // TS-990S: commands like AG, SQ, SM, RG need a band prefix (0=Main).
+    private var usesBandPrefix: Bool = false
+
     // UTF-16LE support (TS-990S). Detected automatically from ##CN response
     // or inferred when no frames arrive within the encoding probe window.
     private var useUTF16LE: Bool = false
@@ -88,7 +91,8 @@ final class TS890Connection {
                  accountType: KenwoodKNS.AccountType = .administrator,
                  adminId: String,
                  adminPassword: String,
-                 preferUTF16LE: Bool = false) {
+                 preferUTF16LE: Bool = false,
+                 usesBandPrefix: Bool = false) {
         let cleanId = sanitizeCredential(adminId)
         let cleanPw = sanitizeCredential(adminPassword)
 
@@ -114,6 +118,7 @@ final class TS890Connection {
         queue.sync { [weak self] in
             guard let self else { return }
             self.teardown()
+            self.usesBandPrefix = usesBandPrefix
             self.useUTF16LE = preferUTF16LE
             self.didRetryEncoding = preferUTF16LE
             self.hasReceivedFrame = false
@@ -523,10 +528,19 @@ final class TS890Connection {
             self.writeDirect(KenwoodCAT.getVFOAFrequency(), fd: fd)
             switch tickCount % 2 {
             case 0:
-                self.writeDirect(KenwoodCAT.getAFGain(), fd: fd)
-                self.writeDirect(KenwoodCAT.getRFGain(), fd: fd)
+                if self.usesBandPrefix {
+                    self.writeDirect(KenwoodCAT.getAFGain(band: 0), fd: fd)
+                    self.writeDirect(KenwoodCAT.getRFGain(band: 0), fd: fd)
+                } else {
+                    self.writeDirect(KenwoodCAT.getAFGain(), fd: fd)
+                    self.writeDirect(KenwoodCAT.getRFGain(), fd: fd)
+                }
             default:
-                self.writeDirect(KenwoodCAT.getSquelchLevel(), fd: fd)
+                if self.usesBandPrefix {
+                    self.writeDirect(KenwoodCAT.getSquelchLevel(band: 0), fd: fd)
+                } else {
+                    self.writeDirect(KenwoodCAT.getSquelchLevel(), fd: fd)
+                }
             }
             // Re-assert AI4 every 30 s (every 6th tick) in case the radio reset it
             // (e.g. after a menu save, firmware quirk, or brief power glitch).

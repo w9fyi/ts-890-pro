@@ -112,6 +112,14 @@ struct KenwoodCapabilities {
     /// Maximum TX power in watts. TS-590S: 100W HF/50W 6m. TS-890S: 100W. TS-990S: 200W.
     let maxTXPowerWatts: Int
 
+    /// Commands like AG, SQ, SM, NR, RG require a leading band parameter (0=Main, 1=Sub).
+    /// TS-990S: true (dual independent receivers). All others: false.
+    let usesBandPrefix: Bool
+
+    /// Uses CB (Operating Band) / TB (Transmit Band) instead of FR/FT (Receiver/Transmitter VFO).
+    /// TS-990S: true. All others: false.
+    let usesCBTB: Bool
+
     // MARK: - LAN encoding type
 
     enum LANEncoding {
@@ -156,7 +164,9 @@ struct KenwoodCapabilities {
                 hasAPFCommands:       true,
                 hasDataModeCommand:   false,
                 hasMonitorCommands:   true,
-                maxTXPowerWatts:      100
+                maxTXPowerWatts:      100,
+                usesBandPrefix:       false,
+                usesCBTB:             false
             )
 
         case .ts990s:
@@ -179,7 +189,9 @@ struct KenwoodCapabilities {
                 hasAPFCommands:       false,
                 hasDataModeCommand:   false,
                 hasMonitorCommands:   true,
-                maxTXPowerWatts:      200
+                maxTXPowerWatts:      200,
+                usesBandPrefix:       true,
+                usesCBTB:             true
             )
 
         case .ts590sg:
@@ -202,7 +214,9 @@ struct KenwoodCapabilities {
                 hasAPFCommands:       false,
                 hasDataModeCommand:   true,
                 hasMonitorCommands:   false,
-                maxTXPowerWatts:      100
+                maxTXPowerWatts:      100,
+                usesBandPrefix:       false,
+                usesCBTB:             false
             )
 
         case .ts590s:
@@ -225,7 +239,9 @@ struct KenwoodCapabilities {
                 hasAPFCommands:       false,
                 hasDataModeCommand:   true,
                 hasMonitorCommands:   false,
-                maxTXPowerWatts:      100
+                maxTXPowerWatts:      100,
+                usesBandPrefix:       false,
+                usesCBTB:             false
             )
 
         case .unknown:
@@ -250,7 +266,9 @@ struct KenwoodCapabilities {
                 hasAPFCommands:       true,
                 hasDataModeCommand:   false,
                 hasMonitorCommands:   true,
-                maxTXPowerWatts:      100
+                maxTXPowerWatts:      100,
+                usesBandPrefix:       false,
+                usesCBTB:             false
             )
         }
     }

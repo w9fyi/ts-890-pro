@@ -25,7 +25,10 @@ final class FreeDVUsbPipeline {
     var onLog:   ((String) -> Void)?
     var onError: ((String) -> Void)?
 
-    private let fdvEngine: FreeDVEngine
+    private let rxDecoder: FreeDVDecoding
+    private let txEngine: FreeDVEngine?     // TX is codec2-only; nil for RADE (RX-only)
+    /// 48 kHz ÷ decoded speech rate: 6 for codec2 (8 kHz), 3 for RADE (16 kHz).
+    private let rxUpsampleFactor: Int
     private let sampleRate: Double = 48_000
 
     // RX audio units
@@ -64,15 +67,24 @@ final class FreeDVUsbPipeline {
     private var usbOutCtx:     OutputCallbackCtx?
 
     init(engine: FreeDVEngine) {
-        self.fdvEngine = engine
+        self.rxDecoder = engine
+        self.txEngine = engine
+        self.rxUpsampleFactor = max(1, 48_000 / engine.speechSampleRate)
+    }
+
+    /// RADE is receive-only; the TX path is disabled for this decoder.
+    init(radeDecoder: RADEEngine) {
+        self.rxDecoder = radeDecoder
+        self.txEngine = nil
+        self.rxUpsampleFactor = max(1, 48_000 / radeDecoder.speechSampleRate)
     }
 
     // MARK: - Start / Stop
 
     func start(usbDeviceID: AudioDeviceID, speakerDeviceID: AudioDeviceID) throws {
         stop()
-        guard fdvEngine.isOpen else {
-            onError?("FreeDVUsbPipeline: FreeDV engine not open")
+        guard rxDecoder.isOpen else {
+            onError?("FreeDVUsbPipeline: decoder not open")
             return
         }
 
@@ -310,15 +322,16 @@ final class FreeDVUsbPipeline {
 
         // Feed accumulated 8 kHz modem samples to FreeDV.
         if !rxSpeech8kBuf.isEmpty {
-            let speech = fdvEngine.feedModemSamples(rxSpeech8kBuf)
+            let speech = rxDecoder.feedModemSamples(rxSpeech8kBuf)
             rxSpeech8kBuf.removeAll(keepingCapacity: true)
             if !speech.isEmpty {
-                // Upsample decoded speech 8→48 kHz (factor 6, linear interpolation).
+                // Upsample decoded speech → 48 kHz (×rxUpsampleFactor, linear interp).
+                let f = rxUpsampleFactor
                 let fSpeech = speech.map { Float($0) / 32768.0 }
-                var out = [Float](); out.reserveCapacity(fSpeech.count * 6)
+                var out = [Float](); out.reserveCapacity(fSpeech.count * f)
                 for i in 0 ..< max(0, fSpeech.count - 1) {
                     let a = fSpeech[i], b = fSpeech[i + 1], d = b - a
-                    for k in 0..<6 { out.append(a + d * Float(k) / 6.0) }
+                    for k in 0..<f { out.append(a + d * Float(k) / Float(f)) }
                 }
                 rxLastSpeech = fSpeech.last
                 _ = out.withUnsafeBufferPointer { rxOut.write(from: $0.baseAddress!, count: out.count) }
@@ -328,7 +341,7 @@ final class FreeDVUsbPipeline {
 
     // Mic input → FreeDV encode → USB output
     private func processTx() {
-        guard fdvEngine.nSpeechSamples > 0 else { return }
+        guard let fdvEngine = txEngine, fdvEngine.nSpeechSamples > 0 else { return }
         let chunkSize = 480
         while txRaw.availableToRead() >= chunkSize {
             var frame = [Float](repeating: 0, count: chunkSize)

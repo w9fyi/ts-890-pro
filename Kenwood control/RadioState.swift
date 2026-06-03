@@ -1772,7 +1772,7 @@ final class RadioState {
             // LAN (KNS) audio path.
             send("MS003;") // Rear = LAN (KNS audio carries modem tones)
 
-            let rxPipe = FreeDVLanRxPipeline(engine: freedvEngine)
+            let rxPipe = FreeDVLanRxPipeline(decoder: freedvEngine)
             rxPipe.onAudio48kMono = { [weak self] samples in
                 self?.lanPlayer?.enqueue48kMono(samples)
             }

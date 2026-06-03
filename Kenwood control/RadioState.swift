@@ -1783,7 +1783,11 @@ final class RadioState {
         // Open the decoder for the selected mode.
         if isRADE {
             // RADE (neural voice) — receive only.
-            radeEngine.open()
+            guard radeEngine.open() else {
+                freedvError = "RADE decoder failed to open"
+                AppFileLogger.shared.log("FreeDV: RADE activation aborted — rade_open failed")
+                return
+            }
             radeEngine.onStatsUpdate = { [weak self] sync, snr, _ in
                 DispatchQueue.main.async {
                     guard let self else { return }

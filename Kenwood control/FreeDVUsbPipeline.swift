@@ -94,9 +94,14 @@ final class FreeDVUsbPipeline {
 
         usbInputUnit     = try makeInputUnit(deviceID: usbDeviceID, label: "USB in")
         speakerOutputUnit = try makeOutputUnit(deviceID: speakerDeviceID, label: "Speaker out")
-        micInputUnit     = try makeInputUnit(deviceID: AudioDeviceID(kAudioObjectSystemObject) /* default mic */, label: "Mic in",
-                                             useDefault: true)
-        usbOutputUnit    = try makeOutputUnit(deviceID: usbDeviceID, label: "USB out")
+        // TX units (mic capture + USB-out to the radio) are only created when this
+        // pipeline can transmit. RADE is receive-only (txEngine == nil), so it must
+        // not open the system microphone or a USB-DATA output path.
+        if txEngine != nil {
+            micInputUnit  = try makeInputUnit(deviceID: AudioDeviceID(kAudioObjectSystemObject) /* default mic */, label: "Mic in",
+                                              useDefault: true)
+            usbOutputUnit = try makeOutputUnit(deviceID: usbDeviceID, label: "USB out")
+        }
 
         for unit in [usbInputUnit, speakerOutputUnit, micInputUnit, usbOutputUnit].compactMap({ $0 }) {
             var s = AudioUnitInitialize(unit); guard s == noErr else { throw PipelineError.audioUnitError(s, "Initialize"); }

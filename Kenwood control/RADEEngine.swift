@@ -99,7 +99,10 @@ final class RADEEngine {
 
     // MARK: - Open / Close
 
-    func open(mode: Mode = .radeV1) {
+    /// Opens the RADE decoder. Returns `true` on success; `false` if `rade_open`
+    /// fails (callers must not activate the pipeline when this returns false).
+    @discardableResult
+    func open(mode: Mode = .radeV1) -> Bool {
         close()
 
         rade_initialize()   // no-op in the no-Python build, kept for API correctness
@@ -113,7 +116,7 @@ final class RADEEngine {
         guard let handle else {
             AppFileLogger.shared.log("RADEEngine: rade_open returned nil")
             rade_finalize()
-            return
+            return false
         }
         r = handle
 
@@ -139,6 +142,7 @@ final class RADEEngine {
         AppFileLogger.shared.log(
             "RADEEngine: opened \(mode.label) modem=\(modemSampleRate) Hz "
             + "speech=\(speechSampleRate) Hz ninMax=\(ninMax) nFeatures=\(nFeatures)")
+        return true
     }
 
     func close() {
@@ -162,9 +166,12 @@ final class RADEEngine {
     /// Append modem samples (raw full-scale Int16 at 8 kHz), returning decoded
     /// 16 kHz Int16 speech once full frames are available. Safe from any thread.
     func feedModemSamples(_ samples: [Int16]) -> [Int16] {
-        guard let handle = r else { return [] }
         rxLock.lock()
         defer { rxLock.unlock() }
+        // Read the handle *under* the lock: close() frees it while holding rxLock,
+        // so capturing it before locking risks a use-after-free if deactivate races
+        // an in-flight RX frame.
+        guard let handle = r else { return [] }
 
         // real SSB → analytic IQ
         for s in samples {

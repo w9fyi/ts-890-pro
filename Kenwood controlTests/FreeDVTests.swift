@@ -209,7 +209,7 @@ final class FreeDVLanRxPipelineTests: XCTestCase {
         super.setUp()
         engine = FreeDVEngine()
         engine.open(mode: .mode1600)
-        pipeline = FreeDVLanRxPipeline(engine: engine)
+        pipeline = FreeDVLanRxPipeline(decoder: engine)
         receivedSamples = []
         pipeline.onAudio48kMono = { [weak self] s in self?.receivedSamples.append(s) }
     }
@@ -358,24 +358,24 @@ final class RadioStateFreeDVTests: XCTestCase {
     // MARK: activateFreeDV — LAN path CAT commands
 
     func testActivateFreeDV_lan_setsIsActiveTrue() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         XCTAssertTrue(radio.freedvIsActive)
     }
 
     func testActivateFreeDV_lan_sendsUsbDataMode() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         XCTAssertTrue(sentCommands.contains("OM0D;"),
                       "Expected OM0D; (USB-DATA mode), got \(sentCommands)")
     }
 
     func testActivateFreeDV_lan_sendsMS003() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         XCTAssertTrue(sentCommands.contains("MS003;"),
                       "Expected MS003; (Rear=LAN audio) for FreeDV LAN path, got \(sentCommands)")
     }
 
     func testActivateFreeDV_lan_sendsOM0D_beforeMS003() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         guard let omIdx = sentCommands.firstIndex(of: "OM0D;"),
               let msIdx = sentCommands.firstIndex(of: "MS003;") else {
             XCTFail("Expected both OM0D; and MS003; in sent commands, got \(sentCommands)")
@@ -385,37 +385,37 @@ final class RadioStateFreeDVTests: XCTestCase {
     }
 
     func testActivateFreeDV_setsMode() {
-        radio.activateFreeDV(mode: .mode1600, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode1600), audioPath: .lan)
         XCTAssertEqual(radio.freedvMode, .mode1600)
     }
 
     func testActivateFreeDV_setsAudioPath() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         XCTAssertEqual(radio.freedvAudioPath, .lan)
     }
 
     func testActivateFreeDV_clearsError() {
         radio.freedvError = "stale error"
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         XCTAssertNil(radio.freedvError)
     }
 
     // MARK: activateFreeDV — all modes
 
     func testActivateFreeDV_mode1600_activates() {
-        radio.activateFreeDV(mode: .mode1600, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode1600), audioPath: .lan)
         XCTAssertTrue(radio.freedvIsActive)
         XCTAssertEqual(radio.freedvMode, .mode1600)
     }
 
     func testActivateFreeDV_mode700C_activates() {
-        radio.activateFreeDV(mode: .mode700C, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700C), audioPath: .lan)
         XCTAssertTrue(radio.freedvIsActive)
         XCTAssertEqual(radio.freedvMode, .mode700C)
     }
 
     func testActivateFreeDV_mode700E_activates() {
-        radio.activateFreeDV(mode: .mode700E, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700E), audioPath: .lan)
         XCTAssertTrue(radio.freedvIsActive)
         XCTAssertEqual(radio.freedvMode, .mode700E)
     }
@@ -423,13 +423,13 @@ final class RadioStateFreeDVTests: XCTestCase {
     // MARK: deactivateFreeDV
 
     func testDeactivateFreeDV_setsIsActiveFalse() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         radio.deactivateFreeDV()
         XCTAssertFalse(radio.freedvIsActive)
     }
 
     func testDeactivateFreeDV_sendsMicrophoneSource() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
         XCTAssertTrue(sentCommands.contains("MS010;"),
@@ -438,7 +438,7 @@ final class RadioStateFreeDVTests: XCTestCase {
 
     func testDeactivateFreeDV_restoresPreviousMode_USB() {
         radio.handleFrame("OM02;")   // USB mode
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
         XCTAssertTrue(sentCommands.contains("OM02;"),
@@ -447,7 +447,7 @@ final class RadioStateFreeDVTests: XCTestCase {
 
     func testDeactivateFreeDV_restoresPreviousMode_FM() {
         radio.handleFrame("OM04;")   // FM
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
         XCTAssertTrue(sentCommands.contains("OM04;"),
@@ -456,7 +456,7 @@ final class RadioStateFreeDVTests: XCTestCase {
 
     func testDeactivateFreeDV_withNoPreviousMode_defaultsToUSB() {
         // operatingMode is nil at startup — should default to USB on revert.
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
         XCTAssertTrue(sentCommands.contains("OM02;"),
@@ -464,7 +464,7 @@ final class RadioStateFreeDVTests: XCTestCase {
     }
 
     func testDeactivateFreeDV_resetsStats() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         // Manually set stats to simulate received data.
         radio.freedvSync           = true
         radio.freedvSnrDB          = 12.5
@@ -493,11 +493,11 @@ final class RadioStateFreeDVTests: XCTestCase {
     // MARK: Double activate (guard)
 
     func testActivateFreeDV_whenAlreadyActive_isNoOp() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         let cmdsAfterFirst = sentCommands
 
         // Second activate with different mode — should be ignored.
-        radio.activateFreeDV(mode: .mode1600, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode1600), audioPath: .lan)
         XCTAssertEqual(sentCommands, cmdsAfterFirst,
                        "Second activateFreeDV while active must send no additional commands")
         XCTAssertEqual(radio.freedvMode, .mode700D, "Mode must not change while active")
@@ -508,13 +508,13 @@ final class RadioStateFreeDVTests: XCTestCase {
     func testActivateDeactivateCycle_canRepeat() {
         radio.handleFrame("OM02;")
 
-        radio.activateFreeDV(mode: .mode1600, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode1600), audioPath: .lan)
         XCTAssertTrue(radio.freedvIsActive)
         radio.deactivateFreeDV()
         XCTAssertFalse(radio.freedvIsActive)
 
         DiagnosticsStore.shared.txLog = []
-        radio.activateFreeDV(mode: .mode700E, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700E), audioPath: .lan)
         XCTAssertTrue(radio.freedvIsActive)
         XCTAssertEqual(radio.freedvMode, .mode700E)
         XCTAssertTrue(sentCommands.contains("OM0D;"))
@@ -527,20 +527,20 @@ final class RadioStateFreeDVTests: XCTestCase {
 
     func testFreeDVCATCommand_usbDataModeIsD() {
         // P2=D encodes USB-DATA per TS-890S PC Command Reference.
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         XCTAssertTrue(sentCommands.contains("OM0D;"),
                       "USB-DATA mode must always be OM0D;")
     }
 
     func testFreeDVCATCommand_lanAudioSourceIsMS003() {
         // LAN path: Rear = LAN (KNS audio carries modem tones), P3=3.
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         XCTAssertTrue(sentCommands.contains("MS003;"),
                       "LAN audio path must use MS003; (Rear=LAN) per TS-890S command reference")
     }
 
     func testFreeDVCATCommand_revertMicIsMS010() {
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
         XCTAssertTrue(sentCommands.contains("MS010;"),
@@ -553,7 +553,7 @@ final class RadioStateFreeDVTests: XCTestCase {
         // If the radio was in USB-DATA before FreeDV (e.g., leftover from WSJT-X),
         // deactivation must restore to USB voice mode — not back to USB-DATA.
         radio.handleFrame("OM0D;")   // radio reports USB-DATA
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
         XCTAssertTrue(sentCommands.contains("OM02;"),
@@ -566,7 +566,7 @@ final class RadioStateFreeDVTests: XCTestCase {
         // If LAN audio was running before FreeDV, deactivation must restore
         // MS003 (Rear=LAN) so the KNS connection keeps working — not MS010.
         radio.isLanAudioRunning = true
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
         XCTAssertTrue(sentCommands.contains("MS003;"),
@@ -578,7 +578,7 @@ final class RadioStateFreeDVTests: XCTestCase {
     func testDeactivate_whenLanAudioStoppedDuringFreeDV_restoresToMic() {
         // LAN audio was running on entry but was stopped during FreeDV — fall back to mic.
         radio.isLanAudioRunning = true
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         radio.isLanAudioRunning = false   // simulates user stopping LAN audio
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
@@ -593,7 +593,7 @@ final class RadioStateFreeDVTests: XCTestCase {
         // deactivation must still restore to front mic (MS010;), not USB passthrough (MS002;).
         radio.setTXAudioSource(.usbPassthrough)
         DiagnosticsStore.shared.txLog = []
-        radio.activateFreeDV(mode: .mode700D, audioPath: .lan)
+        radio.activateFreeDV(choice: .codec2(.mode700D), audioPath: .lan)
         DiagnosticsStore.shared.txLog = []
         radio.deactivateFreeDV()
         XCTAssertTrue(sentCommands.contains("MS010;"),

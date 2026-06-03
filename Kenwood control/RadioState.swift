@@ -2101,7 +2101,8 @@ final class RadioState {
         isLanAudioRunning = true
 
         // If FreeDV LAN was activated before LAN audio was started, wire the TX pipeline now.
-        if freedvIsActive && freedvAudioPath == .lan && freedvLanTxPipeline == nil {
+        // RADE is receive-only, so it never gets a TX pipeline.
+        if freedvIsActive && !freedvIsRADE && freedvAudioPath == .lan && freedvLanTxPipeline == nil {
             let txPipe = FreeDVLanTxPipeline(engine: freedvEngine, receiver: receiver)
             txPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV TX: \(msg)") }
             txPipe.onError = { [weak self] msg in DispatchQueue.main.async { self?.freedvError = msg } }
@@ -3206,6 +3207,12 @@ final class RadioState {
         guard !currentHost.isEmpty || connectionType == .usb else {
             AppFileLogger.shared.logSync("PTT: blocked (no host set)")
             announceError("No radio host set")
+            return
+        }
+        // RADE is receive-only — never key the transmitter (it would send a dead carrier).
+        if down && freedvIsActive && freedvIsRADE {
+            AppFileLogger.shared.logSync("PTT: blocked (RADE is receive-only)")
+            announceError("RADE is receive only. Transmit is not available.")
             return
         }
 

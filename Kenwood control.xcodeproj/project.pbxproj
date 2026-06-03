@@ -59,6 +59,9 @@
 				rnnoise/README.md,
 				rnnoise/src/compile.sh,
 				rnnoise/src/rnn_train.py,
+				opus/lib/libopus.a,
+				radae/LICENSE,
+				radae/README.md,
 			);
 			target = 7FCA46AF2F3D39560045FEBD /* TS-890 Pro */;
 		};
@@ -465,7 +468,18 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "Kenwood control/BridgingHeader.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"RADE_PYTHON_FREE=1",
+					"IS_BUILDING_RADE_API=1",
+				);
 				HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/ThirdParty/opus/include",
+					"$(PROJECT_DIR)/ThirdParty/opus/include/dnn",
+					"$(PROJECT_DIR)/ThirdParty/opus/include/celt",
+					"$(PROJECT_DIR)/ThirdParty/opus/include/silk",
+					"$(PROJECT_DIR)/ThirdParty/opus/include/include",
+					"$(PROJECT_DIR)/ThirdParty/radae/src",
 					"$(PROJECT_DIR)/ThirdParty/NR",
 					"$(PROJECT_DIR)/ThirdParty/rnnoise/src",
 					"$(PROJECT_DIR)/ThirdParty/wdsp",
@@ -476,6 +490,7 @@
 				);
 				OTHER_LDFLAGS = (
 					"/opt/homebrew/lib/libfftw3.a",
+					"$(PROJECT_DIR)/ThirdParty/opus/lib/libopus.a",
 					"$(inherited)",
 				);
 			};
@@ -516,7 +531,18 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "Kenwood control/BridgingHeader.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"RADE_PYTHON_FREE=1",
+					"IS_BUILDING_RADE_API=1",
+				);
 				HEADER_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/ThirdParty/opus/include",
+					"$(PROJECT_DIR)/ThirdParty/opus/include/dnn",
+					"$(PROJECT_DIR)/ThirdParty/opus/include/celt",
+					"$(PROJECT_DIR)/ThirdParty/opus/include/silk",
+					"$(PROJECT_DIR)/ThirdParty/opus/include/include",
+					"$(PROJECT_DIR)/ThirdParty/radae/src",
 					"$(PROJECT_DIR)/ThirdParty/NR",
 					"$(PROJECT_DIR)/ThirdParty/rnnoise/src",
 					"$(PROJECT_DIR)/ThirdParty/wdsp",
@@ -527,6 +553,7 @@
 				);
 				OTHER_LDFLAGS = (
 					"/opt/homebrew/lib/libfftw3.a",
+					"$(PROJECT_DIR)/ThirdParty/opus/lib/libopus.a",
 					"$(inherited)",
 				);
 			};

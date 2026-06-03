@@ -6,6 +6,12 @@ import AVFoundation
 /// FreeDV over USB AUDIO CODEC.
 /// RX: USB AUDIO CODEC input (48 kHz) → FreeDV decode → Mac speaker (48 kHz)
 /// TX: System mic (48 kHz) → FreeDV encode → USB AUDIO CODEC output (48 kHz)
+///
+/// Works for both codec2 (`FreeDVEngine`, 8 kHz speech) and the neural RADE
+/// engine (`RADEEngine`, 16 kHz speech) via the `FreeDVEncoding` protocol.
+/// Mic encoding is gated by `txActive` (set through `beginOver`/`endOver`) so
+/// the radio is only fed when keyed and the heavier RADE encoder is idle
+/// otherwise.
 final class FreeDVUsbPipeline {
 
     nonisolated deinit {}
@@ -26,10 +32,15 @@ final class FreeDVUsbPipeline {
     var onError: ((String) -> Void)?
 
     private let rxDecoder: FreeDVDecoding
-    private let txEngine: FreeDVEngine?     // TX is codec2-only; nil for RADE (RX-only)
+    private let txEncoder: FreeDVEncoding   // codec2 or RADE; both transmit
     /// 48 kHz ÷ decoded speech rate: 6 for codec2 (8 kHz), 3 for RADE (16 kHz).
     private let rxUpsampleFactor: Int
+    /// 48 kHz ÷ TX speech rate: 6 for codec2 (8 kHz), 3 for RADE (16 kHz).
+    private let txDecimFactor: Int
     private let sampleRate: Double = 48_000
+
+    /// Mic→radio encoding only runs while keyed; toggled by beginOver/endOver.
+    private var txActive = false
 
     // RX audio units
     private var usbInputUnit:     AudioUnit?
@@ -68,15 +79,39 @@ final class FreeDVUsbPipeline {
 
     init(engine: FreeDVEngine) {
         self.rxDecoder = engine
-        self.txEngine = engine
+        self.txEncoder = engine
         self.rxUpsampleFactor = max(1, 48_000 / engine.speechSampleRate)
+        self.txDecimFactor = max(1, 48_000 / engine.txSpeechSampleRate)
     }
 
-    /// RADE is receive-only; the TX path is disabled for this decoder.
-    init(radeDecoder: RADEEngine) {
-        self.rxDecoder = radeDecoder
-        self.txEngine = nil
-        self.rxUpsampleFactor = max(1, 48_000 / radeDecoder.speechSampleRate)
+    /// RADE: full duplex of decode (RX) and neural encode (TX).
+    init(radeEngine: RADEEngine) {
+        self.rxDecoder = radeEngine
+        self.txEncoder = radeEngine
+        self.rxUpsampleFactor = max(1, 48_000 / radeEngine.speechSampleRate)
+        self.txDecimFactor = max(1, 48_000 / radeEngine.txSpeechSampleRate)
+    }
+
+    // MARK: - Over control (called on PTT down/up by RadioState)
+
+    /// Begin an over: reset the encoder and start feeding the radio from the mic.
+    func beginOver() {
+        txEncoder.resetTx()
+        txRaw.clear()
+        txSpeech8kBuf.removeAll(keepingCapacity: true)
+        txLastModem = nil
+        txActive = true
+        onLog?("FreeDVUsbPipeline: TX over begin")
+    }
+
+    /// End an over: emit the encoder's end-of-over frame (RADE EOO/callsign),
+    /// then stop feeding the radio.
+    func endOver() {
+        guard txActive else { return }
+        let eoo = txEncoder.finishOver()
+        if !eoo.isEmpty { enqueueModem8k(eoo) }
+        txActive = false
+        onLog?("FreeDVUsbPipeline: TX over end")
     }
 
     // MARK: - Start / Stop
@@ -94,14 +129,12 @@ final class FreeDVUsbPipeline {
 
         usbInputUnit     = try makeInputUnit(deviceID: usbDeviceID, label: "USB in")
         speakerOutputUnit = try makeOutputUnit(deviceID: speakerDeviceID, label: "Speaker out")
-        // TX units (mic capture + USB-out to the radio) are only created when this
-        // pipeline can transmit. RADE is receive-only (txEngine == nil), so it must
-        // not open the system microphone or a USB-DATA output path.
-        if txEngine != nil {
-            micInputUnit  = try makeInputUnit(deviceID: AudioDeviceID(kAudioObjectSystemObject) /* default mic */, label: "Mic in",
-                                              useDefault: true)
-            usbOutputUnit = try makeOutputUnit(deviceID: usbDeviceID, label: "USB out")
-        }
+        // TX units: mic capture + USB-DATA out to the radio. Both codec2 and RADE
+        // transmit; mic encoding stays idle until beginOver() sets txActive.
+        txActive = false
+        micInputUnit  = try makeInputUnit(deviceID: AudioDeviceID(kAudioObjectSystemObject) /* default mic */, label: "Mic in",
+                                          useDefault: true)
+        usbOutputUnit = try makeOutputUnit(deviceID: usbDeviceID, label: "USB out")
 
         for unit in [usbInputUnit, speakerOutputUnit, micInputUnit, usbOutputUnit].compactMap({ $0 }) {
             var s = AudioUnitInitialize(unit); guard s == noErr else { throw PipelineError.audioUnitError(s, "Initialize"); }
@@ -116,6 +149,7 @@ final class FreeDVUsbPipeline {
     func stop() {
         guard isRunning else { return }
         isRunning = false
+        txActive = false
         processTimer?.cancel(); processTimer = nil
         for u in [usbInputUnit, speakerOutputUnit, micInputUnit, usbOutputUnit] {
             stopAndDispose(u)
@@ -344,38 +378,49 @@ final class FreeDVUsbPipeline {
         }
     }
 
-    // Mic input → FreeDV encode → USB output
+    // Mic input → FreeDV/RADE encode → USB output (only while keyed).
     private func processTx() {
-        guard let fdvEngine = txEngine, fdvEngine.nSpeechSamples > 0 else { return }
-        let chunkSize = 480
+        let chunkSize = 480 // 10 ms at 48 kHz
+        // When not transmitting, drain the mic so its ring buffer can't back up.
+        guard txActive else { txRaw.clear(); return }
+
         while txRaw.availableToRead() >= chunkSize {
             var frame = [Float](repeating: 0, count: chunkSize)
             let got = frame.withUnsafeMutableBufferPointer { txRaw.read(into: $0.baseAddress!, count: chunkSize) }
             guard got == chunkSize else { break }
 
-            // Decimate 48→8 kHz.
+            // Decimate 48 kHz → encoder speech rate (factor 6 for codec2, 3 for RADE).
             var i = 0
             while i < chunkSize {
                 txSpeech8kBuf.append(Int16(clamping: Int32(frame[i] * 32767.0)))
-                i += 6
+                i += txDecimFactor
             }
         }
 
-        while txSpeech8kBuf.count >= fdvEngine.nSpeechSamples {
-            let frame = Array(txSpeech8kBuf.prefix(fdvEngine.nSpeechSamples))
-            txSpeech8kBuf.removeFirst(fdvEngine.nSpeechSamples)
-            let modem8k = fdvEngine.encodeSpeech(frame)
-            guard !modem8k.isEmpty else { continue }
-
-            // Upsample modem 8→48 kHz.
-            let fModem = modem8k.map { Float($0) / 32768.0 }
-            var out = [Float](); out.reserveCapacity(fModem.count * 6)
-            for i in 0 ..< max(0, fModem.count - 1) {
-                let a = fModem[i], b = fModem[i + 1], d = b - a
-                for k in 0..<6 { out.append(a + d * Float(k) / 6.0) }
-            }
-            txLastModem = fModem.last
-            _ = out.withUnsafeBufferPointer { txOut.write(from: $0.baseAddress!, count: out.count) }
+        // Encoder buffers internally; hand it whatever speech we have and emit
+        // the modem samples it returns.
+        if !txSpeech8kBuf.isEmpty {
+            let modem8k = txEncoder.encodeFromSpeech(txSpeech8kBuf)
+            txSpeech8kBuf.removeAll(keepingCapacity: true)
+            enqueueModem8k(modem8k)
         }
+    }
+
+    /// Upsample real 8 kHz modem Int16 → 48 kHz Float (linear interp) and write
+    /// to the USB-DATA output ring buffer.
+    private func enqueueModem8k(_ modem8k: [Int16]) {
+        guard !modem8k.isEmpty else { return }
+        let fModem = modem8k.map { Float($0) / 32768.0 }
+        var out = [Float](); out.reserveCapacity(fModem.count * 6)
+        if let prev = txLastModem, let first = fModem.first {
+            let d = first - prev
+            for k in 0..<6 { out.append(prev + d * Float(k) / 6.0) }
+        }
+        for i in 0 ..< max(0, fModem.count - 1) {
+            let a = fModem[i], b = fModem[i + 1], d = b - a
+            for k in 0..<6 { out.append(a + d * Float(k) / 6.0) }
+        }
+        txLastModem = fModem.last
+        _ = out.withUnsafeBufferPointer { txOut.write(from: $0.baseAddress!, count: out.count) }
     }
 }

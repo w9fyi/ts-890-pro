@@ -44,7 +44,7 @@ final class RADEEngine {
     private let rxLock = NSLock()
 
     private var ninMax: Int = 0
-    private var nFeatures: Int = 0           // rade_n_features_in_out (floats)
+    private var nFeatures: Int = 0           // rade_n_features_in_out (floats per rade_tx/rade_rx)
     private var nEooBits: Int = 0
 
     // Scratch buffers (RX thread only, under rxLock)
@@ -52,6 +52,25 @@ final class RADEEngine {
     private var featuresOut: [Float] = []
     private var eooOut: [Float] = []
     private var pcmOut: [Float] = []
+
+    // MARK: - Private (RADE TX — under txLock)
+
+    /// LPCNet feature extractor (RADEEncoder * via shim). RADE's transmitter
+    /// consumes 36-float feature vectors; this turns 16 kHz speech into them.
+    private var encoder: OpaquePointer?
+    private let txLock = NSLock()
+
+    private var nTxOut: Int = 0              // RADE_COMP samples per rade_tx() call (8 kHz)
+    private var nTxEooOut: Int = 0           // RADE_COMP samples in the End-of-Over frame
+
+    private var txSpeechBuf: [Int16] = []    // 16 kHz speech awaiting 160-sample feature frames
+    private var txFeatureBuf: [Float] = []   // extracted features awaiting a full rade_tx() batch
+    private var txComplex: [RADE_COMP] = []  // rade_tx() output scratch
+    private var txEooComplex: [RADE_COMP] = [] // rade_tx_eoo() output scratch
+
+    /// Station callsign embedded in the End-of-Over frame (max RADE_EOO_CALLSIGN_MAX
+    /// chars, uppercased). Setting it re-encodes the EOO bits if the engine is open.
+    var txCallsign: String = "" { didSet { applyTxCallsign() } }
 
     // MARK: - Streaming Hilbert (real → analytic IQ); matches real2iq.c
 
@@ -139,18 +158,40 @@ final class RADEEngine {
             AppFileLogger.shared.log("RADEEngine: rade_fargan_create failed")
         }
 
+        // TX: feature extractor + rade_tx() output sizing.
+        nTxOut    = Int(rade_n_tx_out(handle))
+        nTxEooOut = Int(rade_n_tx_eoo_out(handle))
+        txComplex    = [RADE_COMP](repeating: RADE_COMP(real: 0, imag: 0), count: max(nTxOut, 1))
+        txEooComplex = [RADE_COMP](repeating: RADE_COMP(real: 0, imag: 0), count: max(nTxEooOut, 1))
+        txSpeechBuf.removeAll(keepingCapacity: true)
+        txFeatureBuf.removeAll(keepingCapacity: true)
+        encoder = rade_encoder_create()
+        if encoder == nil {
+            AppFileLogger.shared.log("RADEEngine: rade_encoder_create failed (TX unavailable)")
+        }
+        applyTxCallsign()
+
         AppFileLogger.shared.log(
             "RADEEngine: opened \(mode.label) modem=\(modemSampleRate) Hz "
-            + "speech=\(speechSampleRate) Hz ninMax=\(ninMax) nFeatures=\(nFeatures)")
+            + "speech=\(speechSampleRate) Hz ninMax=\(ninMax) nFeatures=\(nFeatures) "
+            + "nTxOut=\(nTxOut) nTxEoo=\(nTxEooOut)")
         return true
     }
 
     func close() {
+        // Take both locks so an in-flight RX (rxLock) or TX (txLock) frame can't
+        // touch `r` / the shims while we free them. Lock order rxLock→txLock is
+        // the only place both are held; RX and TX each take just one, so no cycle.
         rxLock.lock()
-        defer { rxLock.unlock() }
+        txLock.lock()
+        defer { txLock.unlock(); rxLock.unlock() }
         if let f = fargan {
             rade_fargan_destroy(f)
             fargan = nil
+        }
+        if let e = encoder {
+            rade_encoder_destroy(e)
+            encoder = nil
         }
         if let handle = r {
             rade_close(handle)
@@ -159,6 +200,8 @@ final class RADEEngine {
             AppFileLogger.shared.log("RADEEngine: closed")
         }
         complexBuffer.removeAll()
+        txSpeechBuf.removeAll()
+        txFeatureBuf.removeAll()
     }
 
     // MARK: - RX: 8 kHz Int16 real SSB → 16 kHz Int16 speech
@@ -218,6 +261,91 @@ final class RADEEngine {
             collectStats(handle)
         }
         return speechAccum
+    }
+
+    // MARK: - TX: 16 kHz Int16 speech → 8 kHz Int16 real modem
+
+    /// Clear the encoder history and pending TX buffers. Call at the start of
+    /// each over (PTT down) so the feature extractor begins from a clean state.
+    func resetTx() {
+        txLock.lock()
+        defer { txLock.unlock() }
+        if let e = encoder { rade_encoder_reset(e) }
+        txSpeechBuf.removeAll(keepingCapacity: true)
+        txFeatureBuf.removeAll(keepingCapacity: true)
+    }
+
+    /// Stream 16 kHz Int16 speech into the encoder; returns whatever real 8 kHz
+    /// Int16 modem samples are ready. Speech is buffered internally into
+    /// 160-sample (10 ms) feature frames, then batched into rade_tx() calls.
+    /// Safe from any thread (TX thread); concurrent with RX (separate state).
+    func encodeFromSpeech(_ speech: [Int16]) -> [Int16] {
+        txLock.lock()
+        defer { txLock.unlock() }
+        guard let handle = r, let enc = encoder, nFeatures > 0, nTxOut > 0 else { return [] }
+
+        txSpeechBuf.append(contentsOf: speech)
+
+        // Speech → features, one 160-sample frame at a time (extractor is stateful).
+        let frameLen = Int(RADE_ENC_SAMPLES_PER_FRAME)
+        let featPerFrame = Int(RADE_ENC_FEATURES_PER_FRAME)
+        var features = [Float](repeating: 0, count: featPerFrame)
+        while txSpeechBuf.count >= frameLen {
+            var frame = Array(txSpeechBuf.prefix(frameLen))
+            txSpeechBuf.removeFirst(frameLen)
+            frame.withUnsafeBufferPointer { sp in
+                _ = features.withUnsafeMutableBufferPointer { fp in
+                    rade_encoder_compute_features(enc, sp.baseAddress, fp.baseAddress)
+                }
+            }
+            txFeatureBuf.append(contentsOf: features)
+        }
+
+        // Features → IQ, one rade_tx() batch (nFeatures floats) at a time.
+        var modemOut: [Int16] = []
+        while txFeatureBuf.count >= nFeatures {
+            var featIn = Array(txFeatureBuf.prefix(nFeatures))
+            txFeatureBuf.removeFirst(nFeatures)
+            let n = featIn.withUnsafeMutableBufferPointer { fp in
+                txComplex.withUnsafeMutableBufferPointer { cp in
+                    rade_tx(handle, cp.baseAddress, fp.baseAddress)
+                }
+            }
+            appendReal(of: txComplex, count: Int(n), into: &modemOut)
+        }
+        return modemOut
+    }
+
+    /// Generate the End-of-Over frame (real 8 kHz Int16) carrying the callsign,
+    /// and drop any partial buffered speech. Call once at the end of an over.
+    func finishOver() -> [Int16] {
+        txLock.lock()
+        defer { txLock.unlock() }
+        txSpeechBuf.removeAll(keepingCapacity: true)
+        txFeatureBuf.removeAll(keepingCapacity: true)
+        guard let handle = r, nTxEooOut > 0 else { return [] }
+        let n = txEooComplex.withUnsafeMutableBufferPointer { cp in
+            rade_tx_eoo(handle, cp.baseAddress)
+        }
+        var out: [Int16] = []
+        appendReal(of: txEooComplex, count: Int(n), into: &out)
+        return out
+    }
+
+    /// Take the real part of the first `count` analytic IQ samples (the inverse
+    /// of the RX Hilbert step) and append as full-scale Int16 real SSB audio.
+    private func appendReal(of iq: [RADE_COMP], count: Int, into out: inout [Int16]) {
+        guard count > 0 else { return }
+        out.reserveCapacity(out.count + count)
+        for i in 0..<min(count, iq.count) { out.append(floatToInt16(iq[i].real)) }
+    }
+
+    private func applyTxCallsign() {
+        txLock.lock()
+        defer { txLock.unlock() }
+        guard let handle = r, nEooBits > 0 else { return }
+        let cs = String(txCallsign.uppercased().prefix(Int(RADE_EOO_CALLSIGN_MAX)))
+        cs.withCString { rade_tx_set_eoo_callsign(handle, $0) }
     }
 
     // MARK: - Helpers

@@ -416,7 +416,7 @@ final class RadioState {
     enum FreeDVAudioPath: String, CaseIterable { case lan = "LAN (KNS)", usb = "USB Audio" }
 
     /// Unified picker choice: the neural RADE mode (default on-air FreeDV HF
-    /// voice) or one of the legacy codec2 modes. RADE is receive-only here.
+    /// voice) or one of the legacy codec2 modes.
     enum FreeDVModeChoice: Hashable, Identifiable, CaseIterable {
         case rade
         case codec2(FreeDVEngine.Mode)
@@ -438,7 +438,7 @@ final class RadioState {
         }
         var details: String {
             switch self {
-            case .rade:            return "Neural voice · default on-air FreeDV HF mode (receive only)"
+            case .rade:            return "Neural voice · default on-air FreeDV HF mode"
             case .codec2(let m):   return m.details
             }
         }
@@ -1801,12 +1801,13 @@ final class RadioState {
 
         // Open the decoder for the selected mode.
         if isRADE {
-            // RADE (neural voice) — receive only.
+            // RADE (neural voice) — decode (RX) and neural encode (TX).
             guard radeEngine.open() else {
                 freedvError = "RADE decoder failed to open"
                 AppFileLogger.shared.log("FreeDV: RADE activation aborted — rade_open failed")
                 return
             }
+            radeEngine.txCallsign = freedvTxCallsign
             radeEngine.onStatsUpdate = { [weak self] sync, snr, _ in
                 DispatchQueue.main.async {
                     guard let self else { return }
@@ -1864,8 +1865,9 @@ final class RadioState {
             }
         }
 
-        // Decoder used by the RX pipelines (RADE or codec2).
+        // Decoder/encoder used by the RX/TX pipelines (RADE or codec2).
         let decoder: FreeDVDecoding = isRADE ? radeEngine : freedvEngine
+        let encoder: FreeDVEncoding = isRADE ? radeEngine : freedvEngine
 
         if audioPath == .lan {
             // LAN (KNS) audio path.
@@ -1882,9 +1884,9 @@ final class RadioState {
                 startLanAudio(host: currentHost)
             }
 
-            // RADE is receive-only — no TX pipeline.
-            if !isRADE, let receiver = lanReceiver {
-                let txPipe = FreeDVLanTxPipeline(engine: freedvEngine, receiver: receiver)
+            // TX pipeline (codec2 or RADE neural encode).
+            if let receiver = lanReceiver {
+                let txPipe = FreeDVLanTxPipeline(encoder: encoder, receiver: receiver)
                 txPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV TX: \(msg)") }
                 txPipe.onError = { [weak self] msg in
                     DispatchQueue.main.async { self?.freedvError = msg }
@@ -1906,8 +1908,8 @@ final class RadioState {
             }
             let speakerID = AudioDeviceManager.defaultOutputDeviceID() ?? AudioDeviceID(kAudioObjectSystemObject)
 
-            // RADE: receive-only USB pipeline (TX path disabled).
-            let usbPipe = isRADE ? FreeDVUsbPipeline(radeDecoder: radeEngine)
+            // USB pipeline: RX decode + TX encode for both codec2 and RADE.
+            let usbPipe = isRADE ? FreeDVUsbPipeline(radeEngine: radeEngine)
                                  : FreeDVUsbPipeline(engine: freedvEngine)
             usbPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV USB: \(msg)") }
             usbPipe.onError = { [weak self] msg in
@@ -2124,9 +2126,9 @@ final class RadioState {
         isLanAudioRunning = true
 
         // If FreeDV LAN was activated before LAN audio was started, wire the TX pipeline now.
-        // RADE is receive-only, so it never gets a TX pipeline.
-        if freedvIsActive && !freedvIsRADE && freedvAudioPath == .lan && freedvLanTxPipeline == nil {
-            let txPipe = FreeDVLanTxPipeline(engine: freedvEngine, receiver: receiver)
+        if freedvIsActive && freedvAudioPath == .lan && freedvLanTxPipeline == nil {
+            let encoder: FreeDVEncoding = freedvIsRADE ? radeEngine : freedvEngine
+            let txPipe = FreeDVLanTxPipeline(encoder: encoder, receiver: receiver)
             txPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV TX: \(msg)") }
             txPipe.onError = { [weak self] msg in DispatchQueue.main.async { self?.freedvError = msg } }
             freedvLanTxPipeline = txPipe
@@ -3257,13 +3259,6 @@ final class RadioState {
             announceError("No radio host set")
             return
         }
-        // RADE is receive-only — never key the transmitter (it would send a dead carrier).
-        if down && freedvIsActive && freedvIsRADE {
-            AppFileLogger.shared.logSync("PTT: blocked (RADE is receive-only)")
-            announceError("RADE is receive only. Transmit is not available.")
-            return
-        }
-
         if down {
             AppFileLogger.shared.logSync("UI: PTT down")
             // Only start VoIP stream if LAN audio is enabled — if the user wants hardware audio
@@ -3283,7 +3278,9 @@ final class RadioState {
                 // FreeDV TX: push modem tones over KNS UDP.
                 freedvLanTxPipeline?.start()
             } else if freedvIsActive && freedvAudioPath == .usb {
-                // FreeDV USB: pipeline handles TX internally via AudioUnit — nothing extra needed.
+                // FreeDV USB: pipeline encodes mic → USB-DATA via AudioUnit. Key the
+                // encoder for this over (resets RADE history, starts feeding tones).
+                freedvUsbPipeline?.beginOver()
                 AppFileLogger.shared.logSync("FreeDV: USB TX started")
             } else if useMicAudio {
                 micTxSource = .mic
@@ -3307,6 +3304,9 @@ final class RadioState {
             AppFileLogger.shared.logSync("UI: PTT up")
             if freedvIsActive && freedvAudioPath == .lan {
                 freedvLanTxPipeline?.stop()
+            } else if freedvIsActive && freedvAudioPath == .usb {
+                // Emit the end-of-over frame and stop feeding the radio.
+                freedvUsbPipeline?.endOver()
             } else {
                 generatedTxState = nil
                 generatedTxBuffer = []

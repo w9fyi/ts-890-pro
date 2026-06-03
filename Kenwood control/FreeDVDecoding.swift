@@ -17,3 +17,39 @@ protocol FreeDVDecoding: AnyObject {
 
 extension FreeDVEngine: FreeDVDecoding {}
 extension RADEEngine: FreeDVDecoding {}
+
+/// Common TX-encode surface shared by the legacy codec2 `FreeDVEngine` (8 kHz
+/// speech in) and the neural `RADEEngine` (16 kHz speech in). Both emit real
+/// Int16 modem audio at 8 kHz, so the audio pipelines only need the input
+/// speech rate to size their mic resampler; the modem-output handling is
+/// identical for both. Encoders buffer internally, so callers may feed
+/// arbitrary-length speech chunks.
+protocol FreeDVEncoding: AnyObject {
+    var isOpen: Bool { get }
+
+    /// Speech sample rate the encoder consumes (codec2: 8000, RADE: 16000).
+    var txSpeechSampleRate: Int { get }
+
+    /// Feed speech Int16 at `txSpeechSampleRate`; returns whatever real modem
+    /// Int16 samples (8 kHz) are ready. Buffers partial frames internally.
+    func encodeFromSpeech(_ speech: [Int16]) -> [Int16]
+
+    /// Clear encoder history and pending buffers at the start of an over.
+    func resetTx()
+
+    /// Emit any end-of-over signalling (RADE: the EOO/callsign frame) as real
+    /// modem Int16 at 8 kHz. codec2 has none and returns empty.
+    func finishOver() -> [Int16]
+}
+
+extension FreeDVEncoding {
+    func resetTx() {}
+    func finishOver() -> [Int16] { [] }
+}
+
+extension FreeDVEngine: FreeDVEncoding {
+    var txSpeechSampleRate: Int { speechSampleRate }
+}
+extension RADEEngine: FreeDVEncoding {
+    var txSpeechSampleRate: Int { speechSampleRate }
+}

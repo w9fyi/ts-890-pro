@@ -28,4 +28,8 @@
 #include "RADEFargan.h"
 #endif
 
+#if __has_include("RADEEncoder.h")
+#include "RADEEncoder.h"
+#endif
+
 #endif /* BridgingHeader_h */

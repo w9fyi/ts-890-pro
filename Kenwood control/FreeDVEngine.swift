@@ -66,6 +66,9 @@ final class FreeDVEngine {
     private var txTextChars: [CChar] = []
     private var txTextIdx:   Int = 0
 
+    // Streaming-encode buffer (accessed only on the TX thread)
+    private var txStreamBuf: [Int16] = []
+
     // MARK: - Open / Close
 
     func open(mode: Mode) {
@@ -103,10 +106,30 @@ final class FreeDVEngine {
         rxLock.lock()
         modemRxBuffer.removeAll()
         rxLock.unlock()
+        txStreamBuf.removeAll()
         AppFileLogger.shared.log("FreeDVEngine: closed")
     }
 
     // MARK: - TX: 8 kHz Int16 speech → 8 kHz Int16 modem
+
+    /// Streaming encode: feed arbitrary-length 8 kHz speech; returns modem Int16
+    /// for every full `nSpeechSamples` frame buffered so far. Partial frames are
+    /// retained for the next call. Mirrors `RADEEngine.encodeFromSpeech` so the
+    /// audio pipelines can drive either engine through `FreeDVEncoding`.
+    func encodeFromSpeech(_ speech: [Int16]) -> [Int16] {
+        guard nSpeechSamples > 0 else { return [] }
+        txStreamBuf.append(contentsOf: speech)
+        var modem: [Int16] = []
+        while txStreamBuf.count >= nSpeechSamples {
+            let frame = Array(txStreamBuf.prefix(nSpeechSamples))
+            txStreamBuf.removeFirst(nSpeechSamples)
+            modem.append(contentsOf: encodeSpeech(frame))
+        }
+        return modem
+    }
+
+    /// Clear the streaming-encode buffer at the start of an over.
+    func resetTx() { txStreamBuf.removeAll(keepingCapacity: true) }
 
     /// Encode one speech frame. Input must be exactly `nSpeechSamples` Int16 samples.
     /// Returns `nTxModemSamples` Int16 modem samples, or empty on error.

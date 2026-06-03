@@ -382,6 +382,12 @@ final class RadioState {
     var connectionType: ConnectionType = .lan
     var availableSerialPorts: [SerialPort] = []
     var selectedSerialPort: String = ""
+    /// User-selectable USB CAT baud rate. Must match the radio's menu setting.
+    /// TS-890S default is 115200; TS-990S and TS-590 families may be set lower.
+    var usbBaudRate: Int = {
+        let stored = UserDefaults.standard.integer(forKey: "usbBaudRate")
+        return stored == 0 ? 115_200 : stored
+    }()
 
     // MARK: - Bandscope / Waterfall
     /// Current span in kHz from BS4 (5/10/25/50/100/200/500). Default 50.
@@ -408,7 +414,42 @@ final class RadioState {
 
     // MARK: - FreeDV state
     enum FreeDVAudioPath: String, CaseIterable { case lan = "LAN (KNS)", usb = "USB Audio" }
+
+    /// Unified picker choice: the neural RADE mode (default on-air FreeDV HF
+    /// voice) or one of the legacy codec2 modes. RADE is receive-only here.
+    enum FreeDVModeChoice: Hashable, Identifiable, CaseIterable {
+        case rade
+        case codec2(FreeDVEngine.Mode)
+
+        static var allCases: [FreeDVModeChoice] {
+            [.rade] + FreeDVEngine.Mode.allCases.map(FreeDVModeChoice.codec2)
+        }
+        var id: String {
+            switch self {
+            case .rade:            return "rade"
+            case .codec2(let m):   return "codec2_\(m.rawValue)"
+            }
+        }
+        var label: String {
+            switch self {
+            case .rade:            return "RADE"
+            case .codec2(let m):   return m.label
+            }
+        }
+        var details: String {
+            switch self {
+            case .rade:            return "Neural voice · default on-air FreeDV HF mode (receive only)"
+            case .codec2(let m):   return m.details
+            }
+        }
+        var isRADE: Bool { if case .rade = self { return true }; return false }
+    }
+
     var freedvIsActive:        Bool   = false
+    /// RADE is the default — it's the dominant on-air FreeDV HF voice mode.
+    var freedvModeChoice:      FreeDVModeChoice = .rade
+    /// True while the active decoder is RADE (no TX, no BER stats).
+    private(set) var freedvIsRADE: Bool = false
     var freedvMode:            FreeDVEngine.Mode = .mode700D
     var freedvAudioPath:       FreeDVAudioPath = .lan
     var freedvSync:            Bool   = false
@@ -490,6 +531,7 @@ final class RadioState {
 
     // FreeDV
     private let freedvEngine = FreeDVEngine()
+    private let radeEngine = RADEEngine()
     private var freedvLanRxPipeline: FreeDVLanRxPipeline?
     private var freedvLanTxPipeline: FreeDVLanTxPipeline?
     private var freedvUsbPipeline: FreeDVUsbPipeline?
@@ -627,6 +669,11 @@ final class RadioState {
            let savedMode = FreeDVEngine.Mode(rawValue: Int32(rawMode)) {
             freedvMode = savedMode
         }
+        // Restore the unified mode choice (defaults to RADE if absent/unknown).
+        if let savedChoice = UserDefaults.standard.string(forKey: "freedv_mode_choice"),
+           let choice = FreeDVModeChoice.allCases.first(where: { $0.id == savedChoice }) {
+            freedvModeChoice = choice
+        }
         if let rawPath = UserDefaults.standard.string(forKey: "freedv_audio_path"),
            let savedPath = FreeDVAudioPath(rawValue: rawPath) {
             freedvAudioPath = savedPath
@@ -727,20 +774,11 @@ final class RadioState {
                             self.send(KenwoodCAT.getVoipOutputLevel())
                         }
                     }
-                    // Enable Auto-Information mode: radio pushes FA/FB/OM/RIT/XIT/etc.
-                    // changes unsolicited, eliminating the need to poll those values.
-                    // TS-890S/990S: AI4 (backed up, survives reconnects).
-                    // TS-590S/SG: AI2 (non-persistent; AI4 not supported).
-                    self.send(self.capabilities.aiCommand)
-                    // Prime basic audio/rf controls and common operating params.
-                    self.send(KenwoodCAT.getAFGain())
-                    self.send(KenwoodCAT.getRFGain())
-                    self.queryTop5()
-                    // Enable bandscope streaming to LAN (high cycle) and read span
-                    if self.connectionType == .lan && self.capabilities.hasScope {
-                        self.send("DD01;")   // Output to LAN, High cycle
-                        self.queryScopeState()
-                    }
+                    // Identify the radio FIRST so capability flags (AI mode, command set)
+                    // are correct before we send anything model-specific. Without this,
+                    // a TS-990S or TS-590 gets AI4 (890-specific) and the wrong mode
+                    // commands, which silently fails and looks like flaky RX/TX.
+                    self.awaitIDThenPrimeRadio()
                     if self.cwGreetingEnabled {
                         AppFileLogger.shared.log("Morse: playing connect greeting (CQ)")
                         self.morsePlayer.play("CQ")
@@ -912,6 +950,7 @@ final class RadioState {
     }
 
     func connect(host: String, port: Int, radioModelHint: KenwoodRadioModel = .unknown) {
+        connectionGeneration &+= 1
         let p = UInt16(clamping: port)
         let type = KenwoodKNS.AccountType(rawValue: knsAccountType) ?? .administrator
         persistKnsSettings(host: host, port: port, accountType: type)
@@ -927,17 +966,20 @@ final class RadioState {
     }
 
     func connectUSB(portPath: String) {
+        connectionGeneration &+= 1
         connectionType = .usb
         currentSerialPort = portPath
+        UserDefaults.standard.set(usbBaudRate, forKey: "usbBaudRate")
         DiagnosticsStore.shared.lastError = nil
         let serial = SerialCATConnection()
         connection = serial
         wireCallbacks()
-        serial.connect(portPath: portPath)
+        serial.connect(portPath: portPath, baudRate: speed_t(usbBaudRate))
         connectionStatus = ConnectionStatus.connecting.rawValue
     }
 
     func disconnect() {
+        connectionGeneration &+= 1
         if cwGreetingEnabled {
             AppFileLogger.shared.log("Morse: playing disconnect farewell (73)")
             morsePlayer.play("73")
@@ -1104,6 +1146,80 @@ final class RadioState {
         if !audioOutputDevices.isEmpty {
             let names = audioOutputDevices.prefix(10).map { "\($0.name) uid=\($0.uid)" }.joined(separator: " | ")
             AppFileLogger.shared.log("Audio outputs (first 10): \(names)")
+        }
+    }
+
+    // MARK: - ID-first handshake
+    //
+    // Problem: connect-time command burst (AI4, 30+ queries) was fired before the
+    // radio model was known. On a TS-990S or TS-590 this meant we sent TS-890S
+    // commands (wrong AI mode, wrong mode-query command) — radio silently ignored
+    // most of it and the user saw intermittent TX/RX (issue #3).
+    //
+    // Fix: send ID; immediately, wait up to 2 seconds for the response to update
+    // capabilities, then send the AI command + full query sweep. If no ID reply
+    // arrives (e.g. wrong baud, cable, or port), fall back to the default capability
+    // set after the timeout so connection isn't blocked forever.
+    private func awaitIDThenPrimeRadio() {
+        let identifiedGeneration = radioModelGeneration
+        let capturedConnGen = connectionGeneration
+        send("ID;")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            guard let self else { return }
+            // Drop stale closure if a new connect/disconnect has occurred since this
+            // handshake was started.
+            guard self.connectionGeneration == capturedConnGen else { return }
+            // If ID response already updated capabilities, prime immediately.
+            if self.radioModelGeneration != identifiedGeneration {
+                self.primeRadioAfterID()
+                return
+            }
+            // Otherwise retry ID; once more in case the first was lost in a pile
+            // of outbound queries (Kenwood radios can miss the first command on
+            // some USB adapters right after the port opens).
+            self.send("ID;")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self else { return }
+                // Drop stale closure if the session changed during the retry window.
+                guard self.connectionGeneration == capturedConnGen else { return }
+                if self.radioModelGeneration == identifiedGeneration {
+                    AppFileLogger.shared.log(
+                        "ID timeout — proceeding with default \(self.radioModel) capabilities. " +
+                        "If this is a TS-990S or TS-590, check USB CAT baud rate in the radio menu."
+                    )
+                }
+                self.primeRadioAfterID()
+            }
+        }
+    }
+
+    /// Monotonic counter bumped whenever radioModel changes. Used by the ID
+    /// handshake to detect that an ID response arrived.
+    private var radioModelGeneration: Int = 0
+
+    /// Monotonic counter bumped on every connect AND disconnect. Captured at the
+    /// start of awaitIDThenPrimeRadio so stale closures from a previous session
+    /// are silently dropped instead of firing primeRadioAfterID into a new session.
+    private var connectionGeneration: Int = 0
+
+    private func primeRadioAfterID() {
+        // Enable Auto-Information mode: radio pushes FA/FB/OM/RIT/XIT/etc.
+        // changes unsolicited, eliminating the need to poll those values.
+        // TS-890S/990S: AI4 (backed up, survives reconnects).
+        // TS-590S/SG: AI2 (non-persistent; AI4 not supported).
+        send(capabilities.aiCommand)
+        // Keep the serial keepalive in sync so it re-asserts the model-correct AI
+        // command rather than always falling back to AI2.
+        if let serial = connection as? SerialCATConnection {
+            serial.updateAICommand(capabilities.aiCommand)
+        }
+        send(KenwoodCAT.getAFGain())
+        send(KenwoodCAT.getRFGain())
+        queryTop5()
+        if connectionType == .lan && capabilities.hasScope {
+            send("DD01;")
+            queryScopeState()
         }
     }
 
@@ -1642,8 +1758,9 @@ final class RadioState {
 
     // MARK: - FreeDV activation
 
-    func activateFreeDV(mode: FreeDVEngine.Mode, audioPath: FreeDVAudioPath) {
+    func activateFreeDV(choice: FreeDVModeChoice, audioPath: FreeDVAudioPath) {
         guard !freedvIsActive else { return }
+        let isRADE = choice.isRADE
 
         // Save the current mode and TX audio source so we can restore them on deactivate.
         // Normalize data modes to their voice equivalents — if the radio is already in
@@ -1657,48 +1774,85 @@ final class RadioState {
         case .amData:               previousModeBeforeFreeDV = .am
         default:                    previousModeBeforeFreeDV = modeSnapshot
         }
-        // Always restore to front mic — if txAudioSource is .usbPassthrough (e.g. from
-        // WSJT-X), restoring that on FreeDV exit would leave USB audio active unexpectedly.
-        previousTxAudioSourceBeforeFreeDV = .hardware
+        // Save the real TX audio source so we can restore it exactly on exit.
+        previousTxAudioSourceBeforeFreeDV = txAudioSource
 
         // Switch radio to USB-DATA.
         send("OM0D;")
 
-        // Open the codec2 FreeDV engine.
-        freedvEngine.open(mode: mode)
-        freedvEngine.txCallsign = freedvTxCallsign
-        freedvEngine.onStatsUpdate = { [weak self] sync, snr, ber, tb, tbe, status in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                let wasSync = self.freedvSync
-                self.freedvSync            = sync
-                self.freedvSnrDB           = snr
-                self.freedvBer             = ber
-                self.freedvTotalBits       = tb
-                self.freedvTotalBitErrors  = tbe
-                self.freedvRxStatus        = status
-                if sync && !wasSync {
-                    self.announceInfo("FreeDV synchronized, SNR \(Int(snr)) dB")
-                } else if !sync && wasSync {
-                    self.announceInfo("FreeDV sync lost")
+        // Open the decoder for the selected mode.
+        if isRADE {
+            // RADE (neural voice) — receive only.
+            guard radeEngine.open() else {
+                freedvError = "RADE decoder failed to open"
+                AppFileLogger.shared.log("FreeDV: RADE activation aborted — rade_open failed")
+                return
+            }
+            radeEngine.onStatsUpdate = { [weak self] sync, snr, _ in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    let wasSync = self.freedvSync
+                    self.freedvSync           = sync
+                    self.freedvSnrDB          = Float(snr)
+                    self.freedvBer            = 0
+                    self.freedvTotalBits      = 0
+                    self.freedvTotalBitErrors = 0
+                    if sync && !wasSync {
+                        self.announceInfo("RADE synchronized, SNR \(snr) dB")
+                    } else if !sync && wasSync {
+                        self.announceInfo("RADE sync lost")
+                    }
+                }
+            }
+            radeEngine.onCallsignReceived = { [weak self] callsign in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.freedvReceivedText.append("[\(callsign)] ")
+                    if self.freedvReceivedText.count > 500 {
+                        self.freedvReceivedText = String(self.freedvReceivedText.suffix(500))
+                    }
+                    self.announceInfo("RADE station \(callsign)")
+                }
+            }
+        } else if case .codec2(let mode) = choice {
+            freedvEngine.open(mode: mode)
+            freedvEngine.txCallsign = freedvTxCallsign
+            freedvEngine.onStatsUpdate = { [weak self] sync, snr, ber, tb, tbe, status in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    let wasSync = self.freedvSync
+                    self.freedvSync            = sync
+                    self.freedvSnrDB           = snr
+                    self.freedvBer             = ber
+                    self.freedvTotalBits       = tb
+                    self.freedvTotalBitErrors  = tbe
+                    self.freedvRxStatus        = status
+                    if sync && !wasSync {
+                        self.announceInfo("FreeDV synchronized, SNR \(Int(snr)) dB")
+                    } else if !sync && wasSync {
+                        self.announceInfo("FreeDV sync lost")
+                    }
+                }
+            }
+            freedvEngine.onTextReceived = { [weak self] char in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.freedvReceivedText.append(char)
+                    if self.freedvReceivedText.count > 500 {
+                        self.freedvReceivedText = String(self.freedvReceivedText.suffix(500))
+                    }
                 }
             }
         }
-        freedvEngine.onTextReceived = { [weak self] char in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.freedvReceivedText.append(char)
-                if self.freedvReceivedText.count > 500 {
-                    self.freedvReceivedText = String(self.freedvReceivedText.suffix(500))
-                }
-            }
-        }
+
+        // Decoder used by the RX pipelines (RADE or codec2).
+        let decoder: FreeDVDecoding = isRADE ? radeEngine : freedvEngine
 
         if audioPath == .lan {
             // LAN (KNS) audio path.
             send("MS003;") // Rear = LAN (KNS audio carries modem tones)
 
-            let rxPipe = FreeDVLanRxPipeline(engine: freedvEngine)
+            let rxPipe = FreeDVLanRxPipeline(decoder: decoder)
             rxPipe.onAudio48kMono = { [weak self] samples in
                 self?.lanPlayer?.enqueue48kMono(samples)
             }
@@ -1709,7 +1863,8 @@ final class RadioState {
                 startLanAudio(host: currentHost)
             }
 
-            if let receiver = lanReceiver {
+            // RADE is receive-only — no TX pipeline.
+            if !isRADE, let receiver = lanReceiver {
                 let txPipe = FreeDVLanTxPipeline(engine: freedvEngine, receiver: receiver)
                 txPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV TX: \(msg)") }
                 txPipe.onError = { [weak self] msg in
@@ -1727,12 +1882,14 @@ final class RadioState {
                 .first { $0.name.localizedCaseInsensitiveContains("USB Audio CODEC") }
             guard let usbID = usbInfo.map(\.id) else {
                 freedvError = "USB Audio CODEC device not found — connect TS-890S USB cable"
-                freedvEngine.close()
+                if isRADE { radeEngine.close() } else { freedvEngine.close() }
                 return
             }
             let speakerID = AudioDeviceManager.defaultOutputDeviceID() ?? AudioDeviceID(kAudioObjectSystemObject)
 
-            let usbPipe = FreeDVUsbPipeline(engine: freedvEngine)
+            // RADE: receive-only USB pipeline (TX path disabled).
+            let usbPipe = isRADE ? FreeDVUsbPipeline(radeDecoder: radeEngine)
+                                 : FreeDVUsbPipeline(engine: freedvEngine)
             usbPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV USB: \(msg)") }
             usbPipe.onError = { [weak self] msg in
                 DispatchQueue.main.async { self?.freedvError = msg }
@@ -1742,18 +1899,23 @@ final class RadioState {
                 freedvUsbPipeline = usbPipe
             } catch {
                 freedvError = "FreeDV USB pipeline: \(error.localizedDescription)"
-                freedvEngine.close()
+                if isRADE { radeEngine.close() } else { freedvEngine.close() }
                 return
             }
         }
 
-        freedvMode      = mode
-        freedvAudioPath = audioPath
-        freedvIsActive  = true
-        freedvError     = nil
-        UserDefaults.standard.set(mode.rawValue, forKey: "freedv_mode")
+        freedvModeChoice = choice
+        freedvIsRADE     = isRADE
+        if case .codec2(let mode) = choice { freedvMode = mode }
+        freedvAudioPath  = audioPath
+        freedvIsActive   = true
+        freedvError      = nil
+        UserDefaults.standard.set(choice.id, forKey: "freedv_mode_choice")
+        if case .codec2(let mode) = choice {
+            UserDefaults.standard.set(mode.rawValue, forKey: "freedv_mode")
+        }
         UserDefaults.standard.set(audioPath.rawValue, forKey: "freedv_audio_path")
-        AppFileLogger.shared.log("FreeDV: activated mode=\(mode.label) path=\(audioPath.rawValue)")
+        AppFileLogger.shared.log("FreeDV: activated mode=\(choice.label) path=\(audioPath.rawValue)")
     }
 
     func deactivateFreeDV() {
@@ -1768,22 +1930,44 @@ final class RadioState {
         freedvUsbPipeline?.stop()
         freedvUsbPipeline   = nil
         freedvEngine.close()
+        radeEngine.close()
 
         // Restore previous radio mode and TX audio source.
         let revertMode = previousModeBeforeFreeDV ?? .usb
         setOperatingMode(revertMode)
-        setTXAudioSource(previousTxAudioSourceBeforeFreeDV ?? .hardware)
+
+        // Restore the rear-connector / TX audio routing.
+        // Never re-enable USB passthrough on FreeDV exit: a stray passthrough
+        // source (e.g. left over from WSJT-X) would silently reroute transmit
+        // audio to a USB feed. Fall back to the front microphone instead.
+        var restoredSource = previousTxAudioSourceBeforeFreeDV ?? .hardware
+        if restoredSource == .usbPassthrough { restoredSource = .hardware }
+        if isLanAudioRunning {
+            // KNS LAN audio is still active. Restore Rear=LAN (MS003) so the
+            // connection keeps carrying audio — not MS010 (Rear off), which
+            // would silently break KNS. USB TX passthrough is incompatible with
+            // the LAN path, so ensure it's stopped and settle the source state
+            // on .hardware without emitting MS010.
+            stopTXPassthrough()
+            txAudioSource = .hardware
+            UserDefaults.standard.set(TXAudioSource.hardware.rawValue, forKey: txAudioSourceKey)
+            send("MS003;")  // SEND/PTT (P1=0), Front=OFF (P2=0), Rear=LAN (P3=3)
+        } else {
+            // No LAN audio: restore the TX audio source that was active before FreeDV.
+            setTXAudioSource(restoredSource)
+        }
         previousModeBeforeFreeDV = nil
         previousTxAudioSourceBeforeFreeDV = nil
 
         freedvIsActive        = false
+        freedvIsRADE          = false
         freedvSync            = false
         freedvSnrDB           = 0
         freedvBer             = 0
         freedvTotalBits       = 0
         freedvTotalBitErrors  = 0
         freedvRxStatus        = 0
-        AppFileLogger.shared.log("FreeDV: deactivated, restored \(revertMode.label)")
+        AppFileLogger.shared.log("FreeDV: deactivated, restored \(revertMode.label), audio=\(restoredSource.rawValue)")
     }
 
     private func postRadioNotification(title: String, body: String) {
@@ -1921,7 +2105,8 @@ final class RadioState {
         isLanAudioRunning = true
 
         // If FreeDV LAN was activated before LAN audio was started, wire the TX pipeline now.
-        if freedvIsActive && freedvAudioPath == .lan && freedvLanTxPipeline == nil {
+        // RADE is receive-only, so it never gets a TX pipeline.
+        if freedvIsActive && !freedvIsRADE && freedvAudioPath == .lan && freedvLanTxPipeline == nil {
             let txPipe = FreeDVLanTxPipeline(engine: freedvEngine, receiver: receiver)
             txPipe.onLog   = { msg in AppFileLogger.shared.log("FreeDV TX: \(msg)") }
             txPipe.onError = { [weak self] msg in DispatchQueue.main.async { self?.freedvError = msg } }
@@ -2189,6 +2374,9 @@ final class RadioState {
                     stopLanAudio()
                 }
             }
+            // Bump the generation even when newModel == radioModel so that the
+            // ID-first handshake can distinguish "ID round-tripped" from "silence".
+            radioModelGeneration &+= 1
             return
         }
 
@@ -3020,9 +3208,15 @@ final class RadioState {
             AppFileLogger.shared.logSync("PTT: ignored (already in requested state)")
             return
         }
-        guard !currentHost.isEmpty else {
+        guard !currentHost.isEmpty || connectionType == .usb else {
             AppFileLogger.shared.logSync("PTT: blocked (no host set)")
             announceError("No radio host set")
+            return
+        }
+        // RADE is receive-only — never key the transmitter (it would send a dead carrier).
+        if down && freedvIsActive && freedvIsRADE {
+            AppFileLogger.shared.logSync("PTT: blocked (RADE is receive-only)")
+            announceError("RADE is receive only. Transmit is not available.")
             return
         }
 

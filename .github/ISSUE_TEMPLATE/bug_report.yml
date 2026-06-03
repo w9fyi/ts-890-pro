@@ -123,11 +123,11 @@ body:
     attributes:
       label: Log file contents (very helpful!)
       description: |
-        TS-890 Pro writes a log at `~/Downloads/Kenwood control/kenwood-control.log`.
+        TS-890 Pro writes a log at `~/Library/Application Support/TS-890 Pro/kenwood-control.log`.
         To find it:
         1. Open Finder
         2. Press Shift+Cmd+G
-        3. Paste `~/Downloads/Kenwood control/` and press Return
+        3. Paste `~/Library/Application Support/TS-890 Pro/` and press Return
         4. Open `kenwood-control.log` in TextEdit
         5. Copy the last 100 lines or so and paste below
       value: |

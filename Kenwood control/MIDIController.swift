@@ -18,13 +18,16 @@ import Observation
 // MARK: - Tuning step
 
 /// How far VFO A moves per relative encoder click when assigned to vfoTune.
+/// Also used as the front-panel step (TuningPreferences) and by the
+/// .cycleVfoStep button action, which steps through these in `allCases` order.
 enum MIDITuningStep: Int, CaseIterable, Identifiable, Codable {
-    case hz1     =       1
-    case hz10    =      10
-    case hz100   =     100
-    case khz1    =   1_000
-    case khz10   =  10_000
-    case khz100  = 100_000
+    case hz1     =         1
+    case hz10    =        10
+    case hz100   =       100
+    case khz1    =     1_000
+    case khz10   =    10_000
+    case khz100  =   100_000
+    case mhz1    = 1_000_000
 
     var id: Int { rawValue }
 
@@ -36,6 +39,7 @@ enum MIDITuningStep: Int, CaseIterable, Identifiable, Codable {
         case .khz1:   return "1 kHz"
         case .khz10:  return "10 kHz"
         case .khz100: return "100 kHz"
+        case .mhz1:   return "1 MHz"
         }
     }
 }
@@ -53,35 +57,38 @@ enum MIDIEventKind: String, Codable {
 /// encoder direction (clicks > 0 = positive, clicks < 0 = negative).
 /// Button actions fire on any non-zero trigger.
 enum MIDIAction: String, CaseIterable, Codable {
-    case vfoTune     // Relative: CW = tune up, CCW = tune down (step configurable)
-    case afGain      // Relative: CW = louder, CCW = quieter (10 units/click, 0–255)
-    case rfGain      // Relative: CW = more RF gain, CCW = less (10 units/click, 0–255)
-    case txPower     // Relative: CW = higher power, CCW = lower (5 W/click, 5–100 W)
-    case memoryStep  // Relative: CW = next memory channel, CCW = previous (0–119)
-    case pttToggle   // Button: each trigger alternates TX/RX
-    case pttHold     // Button: trigger = TX on; release (Note Off or CCW) = RX
+    case vfoTune       // Relative: CW = tune up, CCW = tune down (step configurable)
+    case afGain        // Relative: CW = louder, CCW = quieter (10 units/click, 0–255)
+    case rfGain        // Relative: CW = more RF gain, CCW = less (10 units/click, 0–255)
+    case txPower       // Relative: CW = higher power, CCW = lower (5 W/click, 5–100 W)
+    case memoryStep    // Relative: CW = next memory channel, CCW = previous (0–119)
+    case pttToggle     // Button: each trigger alternates TX/RX
+    case pttHold       // Button: trigger = TX on; release (Note Off or CCW) = RX
+    case cycleVfoStep  // Button: cycles the front-panel tuning step (1 Hz → … → 1 MHz → 1 Hz)
 
     var displayName: String {
         switch self {
-        case .vfoTune:    return "Tune VFO A"
-        case .afGain:     return "Audio (AF) Volume"
-        case .rfGain:     return "RF Gain"
-        case .txPower:    return "TX Power"
-        case .memoryStep: return "Memory Channel"
-        case .pttToggle:  return "PTT Toggle"
-        case .pttHold:    return "PTT Hold"
+        case .vfoTune:      return "Tune VFO A"
+        case .afGain:       return "Audio (AF) Volume"
+        case .rfGain:       return "RF Gain"
+        case .txPower:      return "TX Power"
+        case .memoryStep:   return "Memory Channel"
+        case .pttToggle:    return "PTT Toggle"
+        case .pttHold:      return "PTT Hold"
+        case .cycleVfoStep: return "Cycle VFO Step Size"
         }
     }
 
     var actionDescription: String {
         switch self {
-        case .vfoTune:    return "Clockwise tunes up, counterclockwise tunes down. Step size is configurable."
-        case .afGain:     return "Clockwise raises audio volume, counterclockwise lowers it."
-        case .rfGain:     return "Clockwise increases RF gain, counterclockwise decreases it."
-        case .txPower:    return "Clockwise raises transmit power, counterclockwise lowers it."
-        case .memoryStep: return "Clockwise steps to the next memory channel, counterclockwise to the previous."
-        case .pttToggle:  return "Each press alternates between transmit and receive."
-        case .pttHold:    return "Hold the control to transmit; release to return to receive."
+        case .vfoTune:      return "Clockwise tunes up, counterclockwise tunes down. Step size is configurable."
+        case .afGain:       return "Clockwise raises audio volume, counterclockwise lowers it."
+        case .rfGain:       return "Clockwise increases RF gain, counterclockwise decreases it."
+        case .txPower:      return "Clockwise raises transmit power, counterclockwise lowers it."
+        case .memoryStep:   return "Clockwise steps to the next memory channel, counterclockwise to the previous."
+        case .pttToggle:    return "Each press alternates between transmit and receive."
+        case .pttHold:      return "Hold the control to transmit; release to return to receive."
+        case .cycleVfoStep: return "Each press steps the front-panel tuning step to the next size, wrapping back to 1 Hz after 1 MHz."
         }
     }
 }
@@ -489,6 +496,9 @@ final class MIDIController {
 
         case .pttHold:
             radio.setPTT(down: clicks > 0, useMicAudio: true)
+
+        case .cycleVfoStep:
+            TuningPreferences.shared.cycleStepUp()
         }
     }
 }

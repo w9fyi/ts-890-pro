@@ -16,14 +16,14 @@ if [[ -z "${LOG_FILE}" ]]; then
   # - Local runs may write under ~/Desktop/devprojects or the repo root.
   BID="${BID:-personal.Kenwood-control}"
   CANDIDATES=(
+    "$HOME/Library/Containers/$BID/Data/Library/Application Support/TS-890 Pro/kenwood-control.log"
+    "$HOME/Library/Application Support/TS-890 Pro/kenwood-control.log"
     "$HOME/Library/Containers/$BID/Data/Desktop/devprojects/kenwood-control/kenwood-control.log"
     "$DEVPROJECTS_ROOT/kenwood-control/kenwood-control.log"
     "$HOME/Library/Containers/$BID/Data/Downloads/$REPO_NAME/kenwood-control.log"
-    "$HOME/Library/Containers/$BID/Data/Downloads/Kenwood control/kenwood-control.log"
     "$HOME/Library/Containers/$BID/Data/Library/Logs/kenwood-control.log"
     "$REPO_ROOT/kenwood-control.log"
     "$HOME/Downloads/$REPO_NAME/kenwood-control.log"
-    "$HOME/Downloads/Kenwood control/kenwood-control.log"
   )
 
   newest=""

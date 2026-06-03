@@ -10,15 +10,18 @@ final class FreeDVLanRxPipeline {
     /// 48 kHz Float mono output — wire this to AudioOutputPlayer / LanAudioPipeline.
     var onAudio48kMono: (([Float]) -> Void)?
 
-    private let engine: FreeDVEngine
+    private let decoder: FreeDVDecoding
+    /// 48 kHz ÷ speech rate: 6 for codec2 (8 kHz), 3 for RADE (16 kHz).
+    private let upsampleFactor: Int
     private var lastSpeechSample: Float?
 
     // Downsampling state (16→8 kHz): simple decimation by 2.
     private var decimCounter: Int = 0
     private var modem8kBuffer: [Int16] = []
 
-    init(engine: FreeDVEngine) {
-        self.engine = engine
+    init(decoder: FreeDVDecoding) {
+        self.decoder = decoder
+        self.upsampleFactor = max(1, 48_000 / decoder.speechSampleRate)
     }
 
     func reset() {
@@ -38,38 +41,34 @@ final class FreeDVLanRxPipeline {
         decimCounter = (decimCounter + samples.count) % 2
         modem8kBuffer.append(contentsOf: decimated)
 
-        // Feed to FreeDVEngine (handles its own nin-sized buffering).
-        let speech8k = engine.feedModemSamples(modem8kBuffer)
+        // Feed to the decoder (handles its own nin-sized buffering).
+        let speech = decoder.feedModemSamples(modem8kBuffer)
         modem8kBuffer.removeAll(keepingCapacity: true)
 
-        guard !speech8k.isEmpty else { return }
+        guard !speech.isEmpty else { return }
 
-        // Convert Int16 → Float and upsample 8 kHz → 48 kHz (×6, linear interpolation).
-        let speechFloat = speech8k.map { Float($0) / 32768.0 }
+        // Convert Int16 → Float and upsample speech rate → 48 kHz
+        // (×upsampleFactor, linear interpolation).
+        let speechFloat = speech.map { Float($0) / 32768.0 }
         var out48k = [Float]()
-        out48k.reserveCapacity(speechFloat.count * 6)
+        out48k.reserveCapacity(speechFloat.count * upsampleFactor)
 
-        if let prev = lastSpeechSample {
-            if let first = speechFloat.first {
-                appendSextuples(from: prev, to: first, into: &out48k)
-            }
-            for i in 0 ..< (speechFloat.count - 1) {
-                appendSextuples(from: speechFloat[i], to: speechFloat[i + 1], into: &out48k)
-            }
-        } else {
-            // No prior sample — just repeat first sample 6× for the very first chunk.
-            for i in 0 ..< (speechFloat.count - 1) {
-                appendSextuples(from: speechFloat[i], to: speechFloat[i + 1], into: &out48k)
-            }
+        if let prev = lastSpeechSample, let first = speechFloat.first {
+            appendUpsampled(from: prev, to: first, into: &out48k)
+        }
+        for i in 0 ..< max(0, speechFloat.count - 1) {
+            appendUpsampled(from: speechFloat[i], to: speechFloat[i + 1], into: &out48k)
         }
         lastSpeechSample = speechFloat.last
 
         if !out48k.isEmpty { onAudio48kMono?(out48k) }
     }
 
-    // Linearly interpolate 6 output samples between `a` and `b` (exclusive of `b`).
-    private func appendSextuples(from a: Float, to b: Float, into out: inout [Float]) {
+    // Linearly interpolate `upsampleFactor` output samples between `a` and `b`
+    // (exclusive of `b`).
+    private func appendUpsampled(from a: Float, to b: Float, into out: inout [Float]) {
         let d = b - a
-        for k in 0..<6 { out.append(a + d * Float(k) / 6.0) }
+        let n = upsampleFactor
+        for k in 0..<n { out.append(a + d * Float(k) / Float(n)) }
     }
 }

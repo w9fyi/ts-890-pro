@@ -30,6 +30,7 @@ enum BugReportHelper {
         let status = radio.connectionStatus
         let connType = radio.connectionType.rawValue
         let lastError = DiagnosticsStore.shared.lastError ?? "none"
+        let baud = radio.connectionType == .usb ? "\(radio.usbBaudRate)" : "n/a"
 
         let recentErrors = DiagnosticsStore.shared.errorLog.suffix(10)
             .map { "  - \($0)" }
@@ -46,6 +47,7 @@ enum BugReportHelper {
         macOS: \(os)
         Radio model: \(model)
         Connection type: \(connType)
+        USB baud rate: \(baud)
         Connection status: \(status)
         Last error: \(lastError)
 
@@ -106,11 +108,11 @@ enum BugReportHelper {
     }
 
     private static func logFileURL() -> URL {
-        if let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
-            return downloads.appendingPathComponent("Kenwood control/kenwood-control.log")
+        if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            return appSupport.appendingPathComponent("TS-890 Pro/kenwood-control.log")
         }
         let home = URL(fileURLWithPath: NSHomeDirectory())
-        return home.appendingPathComponent("Library/Logs/kenwood-control.log")
+        return home.appendingPathComponent("Library/Application Support/TS-890 Pro/kenwood-control.log")
     }
 
     // MARK: - GitHub issue

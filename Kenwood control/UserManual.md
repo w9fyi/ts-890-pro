@@ -766,7 +766,7 @@ Press **Run Smoke Test** to send a sequence of diagnostic CAT commands and verif
 
 ### Log File
 
-A persistent log is written to `~/Downloads/Kenwood control/kenwood-control.log`. It includes connection events, audio pipeline state, PTT transitions, NR diagnostics, and CAT frame traces. Use any text viewer to inspect it.
+A persistent log is written to `~/Library/Application Support/TS-890 Pro/kenwood-control.log`. It includes connection events, audio pipeline state, PTT transitions, NR diagnostics, and CAT frame traces. Use any text viewer to inspect it.
 
 ---
 
@@ -868,7 +868,7 @@ The following work entirely without visual inspection:
 
 ### Log file location
 
-`~/Downloads/Kenwood control/kenwood-control.log`
+`~/Library/Application Support/TS-890 Pro/kenwood-control.log`
 
 ---
 

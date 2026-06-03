@@ -1,4 +1,9 @@
 #!/bin/bash
+# No-op: RNNoise C sources now live in ThirdParty/rnnoise/src/ and are compiled
+# directly by Xcode via the synchronized ThirdParty group. Linking a static
+# librnnoise.a is not required (not referenced in OTHER_LDFLAGS).
+# Kept as a phase so the pbxproj reference stays valid; can be removed later.
+exit 0
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

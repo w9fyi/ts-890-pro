@@ -562,12 +562,9 @@ final class TS890Connection {
             self.onLog?("No frames received in \(self.encodingProbeInterval)s — switching to UTF-16LE")
             self.useUTF16LE = true
             self.didRetryEncoding = true
-
-            // Re-send initial commands in UTF-16LE so the radio starts responding.
-            self.onLog?("Re-sending AI + ID in UTF-16LE")
-            self.writeDirect(KenwoodCAT.setAutoInformation(.onNonPersistent), fd: fd)
-            self.writeDirect("ID;", fd: fd)
-            // The keepalive timer is already running and will now send in UTF-16LE too.
+            // Full teardown + reconnect in UTF-16LE. Never inject UTF-16LE bytes onto
+            // an existing UTF-8 socket — the radio issues a TCP RST on malformed input.
+            self.retryWithUTF16LE()
         }
         encodingProbeTimer = timer
         timer.resume()

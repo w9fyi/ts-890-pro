@@ -127,7 +127,9 @@ struct LogbookView: View {
                     Button("Upload to Club Log")     { Task { await uploadAllPending(to: .clubLog) } }
                     Button("Upload to eQSL")         { Task { await uploadAllPending(to: .eqsl) } }
                     Divider()
-                    Button("Sign & Upload to LOTW (TQSL)…") { exportForLOTW() }
+                    Button(LOTWManager.hasCertificate() ? "Upload to LOTW" : "Sign & Upload to LOTW (TQSL)…") {
+                        Task { await uploadToLOTW() }
+                    }
                 } label: {
                     Label("Upload…", systemImage: "arrow.up.to.line")
                 }
@@ -164,19 +166,37 @@ struct LogbookView: View {
         try? adif.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    private func exportForLOTW() {
+    private func uploadToLOTW() async {
         let pending = entries.filter { !$0.uploadedLOTW }
-        let toExport = pending.isEmpty ? entries : pending
-        let launched = LogbookManager.exportAndOpenWithTQSL(
-            entries: toExport,
-            myCallsign: myCallsign.isEmpty ? nil : myCallsign
-        )
-        if launched {
-            uploadStatus = "ADIF exported and opened in TQSL for LOTW signing. Mark contacts as uploaded after TQSL confirms success."
+        let toUpload = pending.isEmpty ? entries : pending
+
+        if LOTWManager.hasCertificate() {
+            isUploading = true
+            defer { isUploading = false }
+            do {
+                let station = LOTWStationData.load()
+                let result = try await LOTWManager.signAndUpload(
+                    entries: toUpload,
+                    station: station,
+                    myCallsign: myCallsign
+                )
+                for e in toUpload { e.uploadedLOTW = true }
+                uploadStatus = result
+            } catch {
+                uploadStatus = error.localizedDescription
+            }
+            showingUploadResult = true
         } else {
-            uploadStatus = "TQSL not found. Download TQSL from lotw.arrl.org and try again."
+            // Fallback: open TQSL.app if installed
+            let launched = LogbookManager.exportAndOpenWithTQSL(
+                entries: toUpload,
+                myCallsign: myCallsign.isEmpty ? nil : myCallsign
+            )
+            uploadStatus = launched
+                ? "ADIF exported and opened in TQSL. Mark contacts as uploaded after TQSL confirms success. To skip this step, import your certificate in Settings → Logbook → LOTW."
+                : "No LOTW certificate configured and TQSL is not installed. Import your .p12 in Settings → Logbook → LOTW."
+            showingUploadResult = true
         }
-        showingUploadResult = true
     }
 
     private func uploadAllPending(to target: UploadTarget) async {
@@ -378,7 +398,7 @@ private struct LogEntryDetailView: View {
                 }
             }
             Section("Upload Status") {
-                Toggle("LOTW (via TQSL export)", isOn: $entry.uploadedLOTW)
+                Toggle("LOTW", isOn: $entry.uploadedLOTW)
                     .accessibilityLabel("Marked as uploaded to LOTW")
                 Toggle("QRZ Logbook", isOn: $entry.uploadedQRZLog)
                     .accessibilityLabel("Marked as uploaded to QRZ Logbook")
@@ -388,6 +408,11 @@ private struct LogEntryDetailView: View {
                     .accessibilityLabel("Marked as uploaded to eQSL")
             }
             Section("Upload Now") {
+                Button("Upload to LOTW") {
+                    Task { await uploadSingleToLOTW(entry) }
+                }
+                .disabled(entry.uploadedLOTW)
+                .accessibilityLabel("Upload this contact to LOTW")
                 Button("Upload to QRZ Logbook") { onUpload(entry, .qrz) }
                     .disabled(entry.uploadedQRZLog)
                     .accessibilityLabel("Upload this contact to QRZ Logbook")
@@ -412,6 +437,22 @@ private struct LogEntryDetailView: View {
         ) {
             Button("Delete", role: .destructive) { ctx.delete(entry) }
             Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private func uploadSingleToLOTW(_ entry: LogEntry) async {
+        do {
+            let station = LOTWStationData.load()
+            let result = try await LOTWManager.signAndUpload(
+                entries: [entry],
+                station: station,
+                myCallsign: myCallsign
+            )
+            entry.uploadedLOTW = true
+            _ = result
+        } catch {
+            // Surface error via accessibility announcement; detail pane has no alert state
+            AccessibilityNotification.Announcement("LOTW upload failed: \(error.localizedDescription)").post()
         }
     }
 }

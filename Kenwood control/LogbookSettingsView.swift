@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct LogbookSettingsView: View {
     // QRZ XML lookup
@@ -22,6 +23,19 @@ struct LogbookSettingsView: View {
     // eQSL (eqsl.cc): username + password
     @State private var eqslUser     = ""
     @State private var eqslPass     = ""
+    // LOTW native credentials + station data
+    @State private var lotwUser         = ""
+    @State private var lotwPass         = ""
+    @State private var lotwCertSubject  = ""
+    @State private var lotwCertPass     = ""
+    @State private var lotwShowingPicker = false
+    @State private var lotwCertError    = ""
+    @State private var lotwDXCC         = 291
+    @State private var lotwITU          = 7
+    @State private var lotwCQ           = 4
+    @State private var lotwARRL         = ""
+    @State private var lotwState        = ""
+    @State private var lotwGrid         = ""
     // My callsign for ADIF station header
     @State private var myCallsign   = ""
     @State private var savedBanner  = false
@@ -95,22 +109,103 @@ struct LogbookSettingsView: View {
                     .padding(8)
                 }
 
-                // LOTW
+                // LOTW — native signing
                 GroupBox("LOTW (Logbook of the World)") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("TS-890 Pro exports ADIF files. Use TQSL to sign and upload to LOTW.")
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Import your TQSL certificate once — TS-890 Pro will sign and upload directly to LOTW without any external tools.")
                             .font(.caption).foregroundStyle(.secondary)
-                        Text("After exporting an ADIF log, open it in TQSL.app to submit to LOTW.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if let tqsl = tqslPath() {
-                            Label("TQSL found: \(tqsl)", systemImage: "checkmark.circle.fill")
+
+                        // Certificate status
+                        if !lotwCertSubject.isEmpty {
+                            Label("Certificate: \(lotwCertSubject)", systemImage: "lock.fill")
                                 .foregroundStyle(.green).font(.caption)
                         } else {
-                            Label("TQSL not found — download from lotw.arrl.org", systemImage: "xmark.circle")
+                            Label("No certificate imported", systemImage: "lock.open")
                                 .foregroundStyle(.secondary).font(.caption)
+                        }
+
+                        // Import button + password
+                        HStack(spacing: 8) {
+                            SecureField(".p12 password", text: $lotwCertPass)
+                                .accessibilityLabel("Certificate file password")
+                                .frame(maxWidth: 180)
+                            Button("Import .p12…") { lotwShowingPicker = true }
+                                .accessibilityLabel("Import TQSL certificate file")
+                            if !lotwCertSubject.isEmpty {
+                                Button("Remove") {
+                                    LOTWManager.deleteCertificate()
+                                    lotwCertSubject = ""
+                                }
+                                .foregroundStyle(.red)
+                                .accessibilityLabel("Remove stored LOTW certificate")
+                            }
+                        }
+                        if !lotwCertError.isEmpty {
+                            Text(lotwCertError).font(.caption).foregroundStyle(.red)
+                        }
+                        Text("Export your certificate from TQSL: Certificates menu → Save Certificate to File.")
+                            .font(.caption2).foregroundStyle(.secondary)
+
+                        Divider()
+
+                        // LOTW credentials
+                        Text("LOTW Account").font(.caption).fontWeight(.semibold)
+                        credentialFields(userLabel: "LOTW Username", user: $lotwUser, passLabel: "LOTW Password", pass: $lotwPass)
+
+                        Divider()
+
+                        // Station data
+                        Text("Station Location").font(.caption).fontWeight(.semibold)
+                        Text("Required for LOTW. These match the station location configured in TQSL.")
+                            .font(.caption2).foregroundStyle(.secondary)
+
+                        HStack(spacing: 12) {
+                            LabeledContent("DXCC Code") {
+                                TextField("291", value: $lotwDXCC, format: .number)
+                                    .frame(width: 60)
+                                    .accessibilityLabel("DXCC entity code — 291 for USA")
+                            }
+                            LabeledContent("ITU Zone") {
+                                TextField("7", value: $lotwITU, format: .number)
+                                    .frame(width: 50)
+                                    .accessibilityLabel("ITU zone")
+                            }
+                            LabeledContent("CQ Zone") {
+                                TextField("4", value: $lotwCQ, format: .number)
+                                    .frame(width: 50)
+                                    .accessibilityLabel("CQ zone")
+                            }
+                        }
+                        HStack(spacing: 12) {
+                            LabeledContent("ARRL Section") {
+                                TextField("e.g. STX", text: $lotwARRL)
+                                    .frame(width: 80)
+                                    .autocorrectionDisabled()
+                                    .accessibilityLabel("ARRL section — required for US stations")
+                            }
+                            LabeledContent("State") {
+                                TextField("e.g. TX", text: $lotwState)
+                                    .frame(width: 50)
+                                    .autocorrectionDisabled()
+                                    .accessibilityLabel("US state — two-letter code")
+                            }
+                            LabeledContent("Grid") {
+                                TextField("e.g. EM10", text: $lotwGrid)
+                                    .frame(width: 70)
+                                    .autocorrectionDisabled()
+                                    .accessibilityLabel("Grid locator")
+                            }
                         }
                     }
                     .padding(8)
+                }
+                .fileImporter(
+                    isPresented: $lotwShowingPicker,
+                    allowedContentTypes: [UTType(filenameExtension: "p12") ?? .data],
+                    allowsMultipleSelection: false
+                ) { result in
+                    guard case .success(let urls) = result, let url = urls.first else { return }
+                    importLOTWCert(from: url)
                 }
 
                 saveButton
@@ -167,6 +262,15 @@ struct LogbookSettingsView: View {
         if let c = KeychainHelper.shared.retrieve(service: .qrzLog)   { qrzLogKey    = c.password }
         if let c = KeychainHelper.shared.retrieve(service: .clubLog)  { clubLogEmail = c.username; clubLogKey = c.password }
         if let c = KeychainHelper.shared.retrieve(service: .eqsl)     { eqslUser     = c.username; eqslPass   = c.password }
+        if let c = KeychainHelper.shared.retrieve(service: .lotw)     { lotwUser     = c.username; lotwPass   = c.password }
+        lotwCertSubject = LOTWManager.certificateSubject() ?? ""
+        let station = LOTWStationData.load()
+        lotwDXCC  = station.dxccEntityCode
+        lotwITU   = station.ituZone
+        lotwCQ    = station.cqZone
+        lotwARRL  = station.arrlSection
+        lotwState = station.usState
+        lotwGrid  = station.gridLocator
     }
 
     private func saveCredentials() {
@@ -176,12 +280,36 @@ struct LogbookSettingsView: View {
         if !qrzLogKey.isEmpty    { KeychainHelper.shared.save(username: "apikey",     password: qrzLogKey,  service: .qrzLog)  }
         if !clubLogEmail.isEmpty { KeychainHelper.shared.save(username: clubLogEmail, password: clubLogKey, service: .clubLog) }
         if !eqslUser.isEmpty     { KeychainHelper.shared.save(username: eqslUser,     password: eqslPass,   service: .eqsl)    }
+        if !lotwUser.isEmpty     { KeychainHelper.shared.save(username: lotwUser,     password: lotwPass,   service: .lotw)    }
+        var station = LOTWStationData()
+        station.dxccEntityCode = lotwDXCC
+        station.ituZone        = lotwITU
+        station.cqZone         = lotwCQ
+        station.arrlSection    = lotwARRL.uppercased()
+        station.usState        = lotwState.uppercased()
+        station.gridLocator    = lotwGrid.uppercased()
+        station.save()
         withAnimation { savedBanner = true }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { withAnimation { savedBanner = false } }
     }
 
-    private func tqslPath() -> String? {
-        let candidates = ["/Applications/TQSL.app", "/usr/local/bin/tqsl"]
-        return candidates.first { FileManager.default.fileExists(atPath: $0) }
+    private func importLOTWCert(from url: URL) {
+        lotwCertError = ""
+        guard url.startAccessingSecurityScopedResource() else {
+            lotwCertError = "Could not access the selected file."
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+        guard let data = try? Data(contentsOf: url) else {
+            lotwCertError = "Could not read the file."
+            return
+        }
+        do {
+            try LOTWManager.importCertificate(p12Data: data, password: lotwCertPass)
+            lotwCertSubject = LOTWManager.certificateSubject() ?? "Imported"
+            lotwCertPass = ""
+        } catch {
+            lotwCertError = error.localizedDescription
+        }
     }
 }

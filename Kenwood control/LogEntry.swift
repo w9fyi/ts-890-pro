@@ -30,6 +30,8 @@ final class LogEntry {
     // Upload status
     var uploadedLOTW:    Bool = false
     var uploadedQRZLog:  Bool = false
+    var uploadedClubLog: Bool = false
+    var uploadedEQSL:    Bool = false
 
     init() {}
 

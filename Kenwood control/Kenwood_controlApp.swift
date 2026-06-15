@@ -315,6 +315,7 @@ struct Kenwood_controlApp: App {
         WindowGroup("FT8", id: "ft8") {
             FT8SectionView(radio: radio)
         }
+        .modelContainer(for: LogEntry.self)
         WindowGroup("Tuning Panel", id: "tuning") {
             TuningPanelView(radio: radio)
         }

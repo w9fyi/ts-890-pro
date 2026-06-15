@@ -13,10 +13,12 @@ final class KeychainHelper {
     private let bundleID: String = Bundle.main.bundleIdentifier ?? "com.ai5os.ts890pro"
 
     enum Service: String {
-        case qrz    = "qrz"
-        case hamqth = "hamqth"
-        case lotw   = "lotw"
-        case qrzLog = "qrzlog"
+        case qrz     = "qrz"
+        case hamqth  = "hamqth"
+        case lotw    = "lotw"
+        case qrzLog  = "qrzlog"
+        case clubLog = "clublog"
+        case eqsl    = "eqsl"
 
         func qualified(with bundleID: String) -> String { "\(bundleID).\(rawValue)" }
     }

@@ -7,16 +7,21 @@ import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
 
+private enum LogbookUploadTarget { case qrz, clubLog, eqsl }
+
 struct LogbookView: View {
     @Query(sort: \LogEntry.dateTime, order: .reverse) private var entries: [LogEntry]
     @Environment(\.modelContext) private var ctx
-    @State private var showingNewQSO     = false
-    @State private var searchText        = ""
+    @State private var showingNewQSO       = false
+    @State private var searchText          = ""
     @State private var selectedEntry: LogEntry?
-    @State private var exportPanel       = false
-    @State private var uploadStatus      = ""
+    @State private var uploadStatus        = ""
     @State private var showingUploadResult = false
-    @State private var isUploading       = false
+    @State private var isUploading         = false
+    @State private var showingImportPanel  = false
+    @State private var importStatus        = ""
+    @State private var showingImportResult = false
+    @State private var showingUploadMenu   = false
 
     // Set from FrontPanelView so the new-QSO sheet pre-fills correctly.
     var radioFrequencyHz: Int    = 0
@@ -44,7 +49,7 @@ struct LogbookView: View {
             .navigationTitle("Logbook (\(entries.count))")
         } detail: {
             if let e = selectedEntry {
-                LogEntryDetailView(entry: e, myCallsign: myCallsign, onUploadQRZ: uploadToQRZ)
+                LogEntryDetailView(entry: e, myCallsign: myCallsign, onUpload: uploadSingle)
             } else {
                 Text("Select a contact")
                     .foregroundStyle(.secondary)
@@ -64,7 +69,28 @@ struct LogbookView: View {
         } message: {
             Text(uploadStatus)
         }
+        .alert("Import Result", isPresented: $showingImportResult) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(importStatus)
+        }
+        .fileImporter(
+            isPresented: $showingImportPanel,
+            allowedContentTypes: Self.adifContentTypes,
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            importADIF(from: url)
+        }
     }
+
+    private static let adifContentTypes: [UTType] = {
+        var types: [UTType] = []
+        if let adif = UTType(filenameExtension: "adif") { types.append(adif) }
+        if let adi  = UTType(filenameExtension: "adi")  { types.append(adi) }
+        if types.isEmpty { types = [.plainText] }
+        return types
+    }()
 
     // MARK: - Toolbar
 
@@ -77,6 +103,13 @@ struct LogbookView: View {
             }
             .accessibilityLabel("Log new QSO")
 
+            Button {
+                showingImportPanel = true
+            } label: {
+                Label("Import ADIF", systemImage: "square.and.arrow.down")
+            }
+            .accessibilityLabel("Import contacts from an ADIF file")
+
             Spacer()
 
             Button {
@@ -84,17 +117,21 @@ struct LogbookView: View {
             } label: {
                 Label("Export ADIF", systemImage: "square.and.arrow.up")
             }
-            .accessibilityLabel("Export log as ADIF")
+            .accessibilityLabel("Export log as ADIF file")
 
             if isUploading {
                 ProgressView().controlSize(.small)
             } else {
-                Button {
-                    Task { await uploadAllPending() }
+                Menu {
+                    Button("Upload to QRZ Logbook") { Task { await uploadAllPending(to: .qrz) } }
+                    Button("Upload to Club Log")     { Task { await uploadAllPending(to: .clubLog) } }
+                    Button("Upload to eQSL")         { Task { await uploadAllPending(to: .eqsl) } }
+                    Divider()
+                    Button("Sign & Upload to LOTW (TQSL)…") { exportForLOTW() }
                 } label: {
-                    Label("Upload to QRZ", systemImage: "arrow.up.to.line")
+                    Label("Upload…", systemImage: "arrow.up.to.line")
                 }
-                .accessibilityLabel("Upload pending contacts to QRZ Logbook")
+                .accessibilityLabel("Upload contacts to online logging services")
             }
         }
         .padding(.horizontal, 12)
@@ -115,18 +152,40 @@ struct LogbookView: View {
 
     // MARK: - Actions
 
+    private typealias UploadTarget = LogbookUploadTarget
+
     private func exportADIF() {
         let adif = LogbookManager.adif(from: entries, myCallsign: myCallsign.isEmpty ? nil : myCallsign)
         let panel = NSSavePanel()
-        panel.title               = "Export ADIF"
+        panel.title                = "Export ADIF"
         panel.nameFieldStringValue = "log.adif"
-        panel.allowedContentTypes = [.init(filenameExtension: "adif") ?? .plainText]
+        panel.allowedContentTypes  = [.init(filenameExtension: "adif") ?? .plainText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? adif.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    private func uploadAllPending() async {
-        let pending = entries.filter { !$0.uploadedQRZLog }
+    private func exportForLOTW() {
+        let pending = entries.filter { !$0.uploadedLOTW }
+        let toExport = pending.isEmpty ? entries : pending
+        let launched = LogbookManager.exportAndOpenWithTQSL(
+            entries: toExport,
+            myCallsign: myCallsign.isEmpty ? nil : myCallsign
+        )
+        if launched {
+            uploadStatus = "ADIF exported and opened in TQSL for LOTW signing. Mark contacts as uploaded after TQSL confirms success."
+        } else {
+            uploadStatus = "TQSL not found. Download TQSL from lotw.arrl.org and try again."
+        }
+        showingUploadResult = true
+    }
+
+    private func uploadAllPending(to target: UploadTarget) async {
+        let pending: [LogEntry]
+        switch target {
+        case .qrz:     pending = entries.filter { !$0.uploadedQRZLog }
+        case .clubLog:  pending = entries.filter { !$0.uploadedClubLog }
+        case .eqsl:    pending = entries.filter { !$0.uploadedEQSL }
+        }
         guard !pending.isEmpty else {
             uploadStatus = "No pending contacts to upload."
             showingUploadResult = true
@@ -135,34 +194,85 @@ struct LogbookView: View {
         isUploading = true
         defer { isUploading = false }
         do {
-            let count = try await LogbookManager.uploadToQRZ(
-                entries: pending,
-                myCallsign: myCallsign.isEmpty ? nil : myCallsign
-            )
-            for e in pending { e.uploadedQRZLog = true }
-            uploadStatus = "Uploaded \(count) contact\(count == 1 ? "" : "s") to QRZ Logbook."
+            let count: Int
+            switch target {
+            case .qrz:
+                count = try await LogbookManager.uploadToQRZ(entries: pending, myCallsign: myCallsign.isEmpty ? nil : myCallsign)
+                for e in pending { e.uploadedQRZLog = true }
+                uploadStatus = "Uploaded \(count) contact\(count == 1 ? "" : "s") to QRZ Logbook."
+            case .clubLog:
+                count = try await LogbookManager.uploadToClubLog(entries: pending, myCallsign: myCallsign)
+                for e in pending { e.uploadedClubLog = true }
+                uploadStatus = "Uploaded \(count) contact\(count == 1 ? "" : "s") to Club Log."
+            case .eqsl:
+                count = try await LogbookManager.uploadToEQSL(entries: pending, myCallsign: myCallsign.isEmpty ? nil : myCallsign)
+                for e in pending { e.uploadedEQSL = true }
+                uploadStatus = "Uploaded \(count) contact\(count == 1 ? "" : "s") to eQSL."
+            }
         } catch {
             uploadStatus = error.localizedDescription
         }
         showingUploadResult = true
     }
 
-    private func uploadToQRZ(entry: LogEntry) {
+    private func uploadSingle(entry: LogEntry, to target: UploadTarget) {
         Task {
             isUploading = true
             defer { isUploading = false }
             do {
-                let count = try await LogbookManager.uploadToQRZ(
-                    entries: [entry],
-                    myCallsign: myCallsign.isEmpty ? nil : myCallsign
-                )
-                if count > 0 { entry.uploadedQRZLog = true }
-                uploadStatus = count > 0 ? "Contact uploaded to QRZ Logbook." : "Upload returned 0 records."
+                switch target {
+                case .qrz:
+                    let n = try await LogbookManager.uploadToQRZ(entries: [entry], myCallsign: myCallsign.isEmpty ? nil : myCallsign)
+                    if n > 0 { entry.uploadedQRZLog = true }
+                    uploadStatus = n > 0 ? "Uploaded to QRZ Logbook." : "QRZ returned 0 records."
+                case .clubLog:
+                    try await LogbookManager.uploadToClubLog(entries: [entry], myCallsign: myCallsign)
+                    entry.uploadedClubLog = true
+                    uploadStatus = "Uploaded to Club Log."
+                case .eqsl:
+                    try await LogbookManager.uploadToEQSL(entries: [entry], myCallsign: myCallsign.isEmpty ? nil : myCallsign)
+                    entry.uploadedEQSL = true
+                    uploadStatus = "Uploaded to eQSL."
+                }
             } catch {
                 uploadStatus = error.localizedDescription
             }
             showingUploadResult = true
         }
+    }
+
+    private func importADIF(from url: URL) {
+        guard url.startAccessingSecurityScopedResource() else { return }
+        defer { url.stopAccessingSecurityScopedResource() }
+        let text: String
+        if let utf8 = try? String(contentsOf: url, encoding: .utf8) {
+            text = utf8
+        } else if let latin1 = try? String(contentsOf: url, encoding: .isoLatin1) {
+            text = latin1
+        } else {
+            importStatus = "Could not read the selected file."
+            showingImportResult = true
+            return
+        }
+        let imported = LogbookManager.importADIF(text)
+        guard !imported.isEmpty else {
+            importStatus = "No valid QSO records found in the file."
+            showingImportResult = true
+            return
+        }
+        // Deduplicate: skip entries whose callsign+date already exist
+        let existingKeys = Set(entries.map { "\($0.callsign)|\($0.adifDate)|\($0.adifTime)" })
+        var added = 0
+        for entry in imported {
+            let key = "\(entry.callsign)|\(entry.adifDate)|\(entry.adifTime)"
+            guard !existingKeys.contains(key) else { continue }
+            ctx.insert(entry)
+            added += 1
+        }
+        importStatus = added == imported.count
+            ? "Imported \(added) contact\(added == 1 ? "" : "s")."
+            : "Imported \(added) of \(imported.count) contacts (\(imported.count - added) duplicates skipped)."
+        showingImportResult = true
     }
 }
 
@@ -195,17 +305,29 @@ private struct LogEntryRow: View {
                 HStack(spacing: 4) {
                     Text(entry.mode).font(.caption2)
                     Text(entry.frequencyMHz).font(.caption2)
+                    if entry.uploadedLOTW {
+                        Image(systemName: "checkmark.seal.fill")
+                            .foregroundStyle(.blue)
+                            .font(.caption2)
+                            .accessibilityLabel("Uploaded to LOTW")
+                    }
                     if entry.uploadedQRZLog {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundStyle(.green)
                             .font(.caption2)
                             .accessibilityLabel("Uploaded to QRZ")
                     }
-                    if entry.uploadedLOTW {
-                        Image(systemName: "checkmark.seal.fill")
-                            .foregroundStyle(.blue)
+                    if entry.uploadedClubLog {
+                        Image(systemName: "checkmark.circle")
+                            .foregroundStyle(.orange)
                             .font(.caption2)
-                            .accessibilityLabel("Uploaded to LOTW")
+                            .accessibilityLabel("Uploaded to Club Log")
+                    }
+                    if entry.uploadedEQSL {
+                        Image(systemName: "envelope.badge.fill")
+                            .foregroundStyle(.purple)
+                            .font(.caption2)
+                            .accessibilityLabel("Uploaded to eQSL")
                     }
                 }
             }
@@ -219,7 +341,7 @@ private struct LogEntryRow: View {
 private struct LogEntryDetailView: View {
     @Bindable var entry: LogEntry
     let myCallsign: String
-    let onUploadQRZ: (LogEntry) -> Void
+    let onUpload: (LogEntry, LogbookUploadTarget) -> Void
     @Environment(\.modelContext) private var ctx
     @State private var confirmDelete = false
 
@@ -256,13 +378,25 @@ private struct LogEntryDetailView: View {
                 }
             }
             Section("Upload Status") {
-                Toggle("LOTW (exported via ADIF)", isOn: $entry.uploadedLOTW)
+                Toggle("LOTW (via TQSL export)", isOn: $entry.uploadedLOTW)
                     .accessibilityLabel("Marked as uploaded to LOTW")
                 Toggle("QRZ Logbook", isOn: $entry.uploadedQRZLog)
                     .accessibilityLabel("Marked as uploaded to QRZ Logbook")
-                Button("Upload to QRZ Now") { onUploadQRZ(entry) }
+                Toggle("Club Log", isOn: $entry.uploadedClubLog)
+                    .accessibilityLabel("Marked as uploaded to Club Log")
+                Toggle("eQSL", isOn: $entry.uploadedEQSL)
+                    .accessibilityLabel("Marked as uploaded to eQSL")
+            }
+            Section("Upload Now") {
+                Button("Upload to QRZ Logbook") { onUpload(entry, .qrz) }
                     .disabled(entry.uploadedQRZLog)
                     .accessibilityLabel("Upload this contact to QRZ Logbook")
+                Button("Upload to Club Log") { onUpload(entry, .clubLog) }
+                    .disabled(entry.uploadedClubLog)
+                    .accessibilityLabel("Upload this contact to Club Log")
+                Button("Upload to eQSL") { onUpload(entry, .eqsl) }
+                    .disabled(entry.uploadedEQSL)
+                    .accessibilityLabel("Upload this contact to eQSL")
             }
             Section {
                 Button("Delete Contact", role: .destructive) { confirmDelete = true }

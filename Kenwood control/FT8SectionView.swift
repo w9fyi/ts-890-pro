@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import SwiftData
 import Observation
 import Foundation
 import AppKit
@@ -67,6 +68,14 @@ final class FT8ViewModel {
     var wasCallingCQBeforeTarget: Bool = false
     // Set by autoReply when the other station sends 73; cqTick reads and acts on it.
     var pendingQSOComplete: Bool = false
+
+    /// When true, each confirmed QSO (73 or RR73 exchanged) is automatically written to the logbook.
+    var autoLogEnabled: Bool = UserDefaults.standard.bool(forKey: "FT8.AutoLogEnabled") {
+        didSet { UserDefaults.standard.set(autoLogEnabled, forKey: "FT8.AutoLogEnabled") }
+    }
+    /// Called on the main thread with the completed LoggedQSO whenever a QSO is confirmed
+    /// and autoLogEnabled is true. The FT8SectionView wires this to the SwiftData modelContext.
+    var onQSOConfirmed: ((LoggedQSO) -> Void)?
     var sameMessageTxCount: Int = 0
     var lastTransmittedText: String = ""
     var cqTickGeneration: Int = 0
@@ -563,6 +572,9 @@ final class FT8ViewModel {
         let line = "QSO confirmed: \(caller)"
         appendLog(line)
         AccessibilityNotification.Announcement(line).post()
+        if autoLogEnabled {
+            onQSOConfirmed?(loggedQSOs[idx])
+        }
     }
 
     private func formatFT8SNR(_ snr: Float) -> String {
@@ -1132,6 +1144,7 @@ private struct FT8BandPreset: Identifiable, Hashable {
 struct FT8SectionView: View {
     let radio: RadioState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
     @State private var vm = FT8ViewModel()
     @State private var showSettings: Bool = false
@@ -1391,6 +1404,19 @@ struct FT8SectionView: View {
                 vm?.ingestRx48kMono(frame)
             }
             AppFileLogger.shared.log("FT8: installed RX audio tap")
+            // Wire auto-log: confirmed FT8 QSOs → SwiftData LogEntry
+            vm.onQSOConfirmed = { [modelContext] qso in
+                let entry = LogEntry(
+                    callsign:    qso.callsign,
+                    dateTime:    qso.date,
+                    frequencyHz: qso.dialHz,
+                    mode:        "FT8",
+                    rstSent:     qso.rstSent,
+                    rstReceived: qso.rstRcvd,
+                    grid:        qso.theirGrid.isEmpty ? nil : qso.theirGrid
+                )
+                modelContext.insert(entry)
+            }
         }
         .onDisappear {
             radio.onLanRxAudio48kMono = nil
@@ -1825,6 +1851,9 @@ private struct FT8SettingsSheet: View {
                             .font(.subheadline)
                             .accessibilityLabel("\(total) contacts this session, \(confirmed) confirmed")
 
+                        Toggle("Auto-log confirmed QSOs to Logbook", isOn: $vm.autoLogEnabled)
+                            .accessibilityLabel("Automatically save confirmed FT8 contacts to the Logbook")
+
                         HStack(spacing: 12) {
                             Button("Export ADIF…") {
                                 let panel = NSSavePanel()
@@ -1845,7 +1874,7 @@ private struct FT8SettingsSheet: View {
                                 .accessibilityLabel("Clear FT8 QSO log")
                         }
 
-                        Text("Logs every station that calls you. ADIF can be imported into most logging programs.")
+                        Text("When Auto-log is on, each confirmed QSO (73 / RR73 exchanged) is saved to the Logbook window automatically. You can also export ADIF at any time.")
                             .font(.footnote)
                             .foregroundColor(.secondary)
                     }

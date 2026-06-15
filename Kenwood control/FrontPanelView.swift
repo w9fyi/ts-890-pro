@@ -1112,7 +1112,7 @@ private struct TuningStepRow: View {
 
     private func tune(by hz: Int) {
         guard let current = radio.vfoAFrequencyHz else { return }
-        let newHz = max(0, min(current + hz, 999_999_999))
+        let newHz = max(30_000, min(current + hz, 999_999_999))
         radio.send(KenwoodCAT.setVFOAFrequencyHz(newHz))
         announceFrequency(newHz)
     }

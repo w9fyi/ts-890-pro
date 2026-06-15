@@ -503,7 +503,8 @@ final class MIDIController {
             radio.setPTT(down: clicks > 0, useMicAudio: true)
 
         case .cycleVfoStep:
-            TuningPreferences.shared.cycleStepUp()
+            if clicks > 0 { TuningPreferences.shared.cycleStepUp() }
+            else { TuningPreferences.shared.cycleStepDown() }
         }
     }
 }

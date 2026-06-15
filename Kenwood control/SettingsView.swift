@@ -155,6 +155,16 @@ struct ConnectionSettingsTab: View {
                     .accessibilityLabel("Refresh serial port list")
             }
 
+            Picker("Baud Rate", selection: $radio.usbBaudRate) {
+                Text("9600").tag(9_600)
+                Text("19200").tag(19_200)
+                Text("38400").tag(38_400)
+                Text("57600").tag(57_600)
+                Text("115200").tag(115_200)
+            }
+            .accessibilityLabel("USB baud rate")
+            .accessibilityHint("Must match the radio's COM menu setting")
+
             HStack(spacing: 12) {
                 Button("Connect") {
                     guard !radio.selectedSerialPort.isEmpty else { return }

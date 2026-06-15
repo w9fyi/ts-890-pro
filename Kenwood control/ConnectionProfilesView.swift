@@ -27,6 +27,9 @@ struct ConnectionProfile: Identifiable, Codable {
 
     /// Preferred connection type. Profiles with .usb store the serial port path in `host`.
     var connectionType: ConnectionType = .lan
+
+    /// Baud rate for USB serial profiles (ignored for LAN). Defaults to 115200 (TS-890S).
+    var baudRate: Int = 115_200
 }
 
 // MARK: - Store
@@ -157,6 +160,7 @@ struct ConnectionProfilesView: View {
             radio.connect(host: profile.host, port: profile.port, radioModelHint: modelHint)
         } else {
             // USB serial connection — host field stores the serial port path
+            radio.usbBaudRate = profile.baudRate
             radio.connectUSB(portPath: profile.host)
         }
         AppFileLogger.shared.log("Profiles: connected via profile '\(profile.name)' type=\(profile.connectionType.rawValue) host=\(profile.host)")
@@ -234,6 +238,15 @@ private struct ProfileEditorSheet: View {
                     labeled("Serial Port:") {
                         TextField("/dev/cu.SLAB_USBtoUART", text: $profile.host)
                     }
+                    Picker("Baud Rate", selection: $profile.baudRate) {
+                        Text("9600").tag(9_600)
+                        Text("19200").tag(19_200)
+                        Text("38400").tag(38_400)
+                        Text("57600").tag(57_600)
+                        Text("115200").tag(115_200)
+                    }
+                    .accessibilityLabel("USB baud rate")
+                    .accessibilityHint("Must match the radio's COM menu setting")
                 } else {
                     labeled("Host / IP:") {
                         TextField("192.168.1.x", text: $profile.host)

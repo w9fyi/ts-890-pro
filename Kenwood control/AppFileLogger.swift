@@ -76,7 +76,7 @@ final class AppFileLogger {
             try trimmed.write(to: url, options: .atomic)
             appendLine("=== log rotated (kept last \(keepTailBytes) bytes) ===")
         } catch {
-            // Ignore.
+            AppLogger.error("Log rotation failed: \(error.localizedDescription) path=\(url.path)")
         }
     }
 

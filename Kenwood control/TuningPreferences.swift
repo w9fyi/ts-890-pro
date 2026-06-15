@@ -42,6 +42,14 @@ final class TuningPreferences {
         announce()
     }
 
+    /// Step down to the next-smaller size, wrapping from 1 Hz back to 1 MHz.
+    func cycleStepDown() {
+        let all = MIDITuningStep.allCases
+        guard let idx = all.firstIndex(of: step) else { return }
+        step = all[(idx + all.count - 1) % all.count]
+        announce()
+    }
+
     private func announce() {
         NSAccessibility.post(
             element: NSApp as Any,

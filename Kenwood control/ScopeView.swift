@@ -478,8 +478,11 @@ struct ScopeView: View {
     }
 
     private var spectrumAccessibilityValue: String {
-        guard let center = centerHz, !engine.currentPoints.isEmpty else {
-            return "No data, span \(spanKHz) kHz, mode \(radio.scopeMode.label)"
+        guard let center = centerHz else {
+            return "Not connected, span \(spanKHz) kHz"
+        }
+        guard !engine.currentPoints.isEmpty else {
+            return "No data yet, span \(spanKHz) kHz, mode \(radio.scopeMode.label)"
         }
         let points  = engine.currentPoints
         let count   = points.count

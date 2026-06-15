@@ -26,12 +26,12 @@ struct ScopeView: View {
                 ZStack(alignment: .topLeading) {
                     Canvas { ctx, size in
                         drawBackground(ctx: ctx, size: size)
+                        drawPassband(ctx: ctx, size: size)
                         drawSpectrum(ctx: ctx, size: size, points: engine.currentPoints)
                         if engine.maxHoldEnabled, !engine.maxHoldPoints.isEmpty {
                             drawMaxHold(ctx: ctx, size: size, points: engine.maxHoldPoints)
                         }
                         drawCenterMarker(ctx: ctx, size: size)
-                        drawFreqAxis(ctx: ctx, size: size)
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("Band scope spectrum")
@@ -45,8 +45,17 @@ struct ScopeView: View {
                         Spacer()
                     }
                 }
-                .frame(height: geo.size.height * 0.30)
+                .frame(height: geo.size.height * 0.35)
                 .background(Color.black)
+
+                // ── Frequency ruler (TS-Control style band between scope and waterfall)
+                Canvas { ctx, size in
+                    ctx.fill(Path(CGRect(origin: .zero, size: size)),
+                             with: .color(KenwoodTheme.scopeRulerBackground))
+                    drawFreqAxis(ctx: ctx, size: size)
+                }
+                .frame(height: 16)
+                .accessibilityHidden(true)
 
                 // ── Waterfall ────────────────────────────────────────────────
                 ZStack {
@@ -72,7 +81,7 @@ struct ScopeView: View {
                             Spacer()
                             Text("PAUSED")
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .foregroundColor(KenwoodTheme.amber)
+                                .foregroundColor(KenwoodTheme.digitsPrimary)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 2)
                                 .background(KenwoodTheme.chassis.opacity(0.8))
@@ -82,7 +91,7 @@ struct ScopeView: View {
                         .accessibilityHidden(true)
                     }
                 }
-                .frame(height: geo.size.height * 0.70)
+                .frame(maxHeight: .infinity)
                 .accessibilityLabel("Waterfall display")
                 .accessibilityHidden(true)
             }
@@ -156,8 +165,61 @@ struct ScopeView: View {
             if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
             else       { path.addLine(to: CGPoint(x: x, y: y)) }
         }
-        ctx.stroke(path, with: .color(KenwoodTheme.amber.opacity(0.7)),
+        ctx.stroke(path, with: .color(KenwoodTheme.meterAmber.opacity(0.7)),
                    style: StrokeStyle(lineWidth: 1.0, dash: [4, 3]))
+    }
+
+    // RX filter cut frequencies in Hz, indexed by the radio's SL/SH IDs (SSB tables).
+    private static let slHzSSB: [Int] = [
+        0, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100,
+        1200, 1300, 1400, 1500, 1600, 1700, 1800, 1900, 2000,
+    ]
+    private static let shHzSSB: [Int] = [
+        600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1600, 1700,
+        1800, 1900, 2000, 2100, 2200, 2300, 2400, 2500, 2600, 2700, 2800,
+        2900, 3000, 3400, 4000, 5000,
+    ]
+    // CW: SL is a passband-width table.
+    private static let slHzCW: [Int] = [
+        50, 80, 100, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900,
+        1000, 1200, 1500, 2000, 2500, 3000,
+    ]
+
+    /// Translucent blue RX passband overlay at the tuned frequency (TS-Control style).
+    /// Approximate for CW (width table centered on the pitch).
+    private func drawPassband(ctx: GraphicsContext, size: CGSize) {
+        guard centerHz != nil, let mode = radio.operatingMode else { return }
+        let spanHz = Double(spanKHz) * 1000.0
+        guard spanHz > 0 else { return }
+
+        let hiID = radio.rxFilterHighCutID ?? 14
+        let loID = radio.rxFilterLowCutID ?? 0
+
+        var fLow: Double
+        var fHigh: Double
+        switch mode {
+        case .usb, .fsk:
+            fLow  = Double(Self.slHzSSB.indices.contains(loID) ? Self.slHzSSB[loID] : 0)
+            fHigh = Double(Self.shHzSSB.indices.contains(hiID) ? Self.shHzSSB[hiID] : 2800)
+        case .lsb:
+            fHigh = -Double(Self.slHzSSB.indices.contains(loID) ? Self.slHzSSB[loID] : 0)
+            fLow  = -Double(Self.shHzSSB.indices.contains(hiID) ? Self.shHzSSB[hiID] : 2800)
+        case .cw, .cwR:
+            let width = Double(Self.slHzCW.indices.contains(loID) ? Self.slHzCW[loID] : 500)
+            fLow  = -width / 2
+            fHigh =  width / 2
+        default:
+            // AM/FM — symmetric around the carrier
+            let width = Double(Self.shHzSSB.indices.contains(hiID) ? Self.shHzSSB[hiID] : 3000)
+            fLow  = -width
+            fHigh =  width
+        }
+
+        let x0 = size.width * (0.5 + fLow / spanHz)
+        let x1 = size.width * (0.5 + fHigh / spanHz)
+        guard x1 > x0 else { return }
+        let rect = CGRect(x: x0, y: 0, width: x1 - x0, height: size.height)
+        ctx.fill(Path(rect), with: .color(KenwoodTheme.passbandBlue))
     }
 
     private func drawCenterMarker(ctx: GraphicsContext, size: CGSize) {
@@ -198,16 +260,13 @@ struct ScopeView: View {
             } label: {
                 Text("Span: \(spanKHz) kHz")
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(KenwoodTheme.amber)
+                    .foregroundColor(KenwoodTheme.digitsPrimary)
                     .accessibilityHidden(true)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
             .accessibilityLabel("Scope span")
             .accessibilityValue("\(spanKHz) kilohertz")
-            .accessibilityRepresentation {
-                Button("Scope span: \(spanKHz) kHz") {}
-            }
 
             scopeDivider
 
@@ -219,16 +278,13 @@ struct ScopeView: View {
             } label: {
                 Text(radio.scopeMode.label)
                     .font(.system(size: 10))
-                    .foregroundColor(KenwoodTheme.amberDim)
+                    .foregroundColor(KenwoodTheme.digitsSecondary)
                     .accessibilityHidden(true)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
             .accessibilityLabel("Scope mode")
             .accessibilityValue(radio.scopeMode.label)
-            .accessibilityRepresentation {
-                Button("Scope mode: \(radio.scopeMode.label)") {}
-            }
 
             scopeDivider
 
@@ -241,7 +297,7 @@ struct ScopeView: View {
             }) {
                 Text("MAX")
                     .font(.system(size: 9, weight: radio.scopeMaxHold ? .bold : .regular))
-                    .foregroundColor(radio.scopeMaxHold ? KenwoodTheme.amber : KenwoodTheme.labelSecondary)
+                    .foregroundColor(radio.scopeMaxHold ? KenwoodTheme.blueLight : KenwoodTheme.labelSecondary)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Max hold")
@@ -251,11 +307,27 @@ struct ScopeView: View {
             Button(action: { radio.setScopePaused(!radio.scopePaused) }) {
                 Image(systemName: radio.scopePaused ? "play.fill" : "pause.fill")
                     .font(.system(size: 9))
-                    .foregroundColor(radio.scopePaused ? KenwoodTheme.amber : KenwoodTheme.labelSecondary)
+                    .foregroundColor(radio.scopePaused ? KenwoodTheme.blueLight : KenwoodTheme.labelSecondary)
                     .accessibilityHidden(true)
             }
             .buttonStyle(.plain)
             .accessibilityLabel(radio.scopePaused ? "Resume scope" : "Pause scope")
+
+            scopeDivider
+
+            // Reference level — inline like TS-Control's waterfall slider
+            Text("Ref")
+                .font(.system(size: 9))
+                .foregroundColor(KenwoodTheme.labelSecondary)
+                .accessibilityHidden(true)
+            Slider(value: Binding(
+                get: { Double(radio.scopeRefLevel) },
+                set: { radio.setScopeRefLevel(Int($0)) }
+            ), in: 0...120, step: 1)
+            .controlSize(.mini)
+            .frame(width: 90)
+            .accessibilityLabel("Reference level")
+            .accessibilityValue(refLevelLabel)
 
             Spacer()
 
@@ -291,7 +363,7 @@ struct ScopeView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Scope Settings")
                 .font(.headline)
-                .foregroundColor(KenwoodTheme.amber)
+                .foregroundColor(KenwoodTheme.digitsPrimary)
 
             // Attenuator
             HStack {
@@ -355,7 +427,7 @@ struct ScopeView: View {
                 .accessibilityValue(refLevelLabel)
                 Text(refLevelLabel)
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(KenwoodTheme.amberDim)
+                    .foregroundColor(KenwoodTheme.digitsSecondary)
                     .frame(width: 50)
             }
 

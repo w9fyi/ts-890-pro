@@ -8,6 +8,13 @@
 import SwiftUI
 import AppKit
 import Network
+import SwiftData
+
+/// Carries the current radio state when opening the Logbook window.
+struct LogbookOpenRequest: Codable, Hashable {
+    var frequencyHz: Int
+    var mode: String
+}
 
 let KenwoodSelectSectionNotification = Notification.Name("KenwoodControl.SelectSection")
 
@@ -174,6 +181,7 @@ struct Kenwood_controlApp: App {
                     openWindow(id: id)
                 }
         }
+        .modelContainer(for: LogEntry.self)
         Window("About TS-890 Pro", id: "about") {
             AboutView()
         }
@@ -253,6 +261,14 @@ struct Kenwood_controlApp: App {
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Menu Access") { openWindow(id: "menuAccess") }
                     .keyboardShortcut("m", modifiers: [.command, .option])
+                Divider()
+                Button("Logbook") {
+                    openWindow(id: "logbook", value: LogbookOpenRequest(
+                        frequencyHz: radio.vfoAFrequencyHz ?? 0,
+                        mode:        radio.operatingMode?.label ?? "SSB"
+                    ))
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
             }
             CommandMenu("Band") {
                 Button("160 m") { radio.jumpToBand("160m") }
@@ -308,5 +324,15 @@ struct Kenwood_controlApp: App {
         WindowGroup("User Manual", id: "userManual") {
             UserManualView()
         }
+        WindowGroup("Logbook", id: "logbook", for: LogbookOpenRequest.self) { $req in
+            NavigationStack {
+                LogbookView(
+                    radioFrequencyHz: req?.frequencyHz ?? 0,
+                    radioMode:        req?.mode ?? "SSB",
+                    myCallsign:       UserDefaults.standard.string(forKey: "logbook_myCallsign") ?? ""
+                )
+            }
+        }
+        .modelContainer(for: LogEntry.self)
     }
 }

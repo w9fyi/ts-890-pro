@@ -387,7 +387,9 @@ final class RadioState {
     var usbBaudRate: Int = {
         let stored = UserDefaults.standard.integer(forKey: "usbBaudRate")
         return stored == 0 ? 115_200 : stored
-    }()
+    }() {
+        didSet { UserDefaults.standard.set(usbBaudRate, forKey: "usbBaudRate") }
+    }
 
     // MARK: - Bandscope / Waterfall
     /// Current span in kHz from BS4 (5/10/25/50/100/200/500). Default 50.

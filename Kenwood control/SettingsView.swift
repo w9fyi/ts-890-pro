@@ -51,6 +51,10 @@ struct SettingsView: View {
             RigctldSettingsView(radio: radio)
                 .tabItem { Label("rigctld", systemImage: "antenna.radiowaves.left.and.right") }
                 .tag(9)
+
+            LogbookSettingsView()
+                .tabItem { Label("Logbook", systemImage: "book.closed") }
+                .tag(10)
         }
         .frame(minWidth: 640, minHeight: 480)
     }

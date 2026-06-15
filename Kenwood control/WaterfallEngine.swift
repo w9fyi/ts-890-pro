@@ -119,31 +119,29 @@ final class WaterfallEngine {
     }
 
     /// Map a scope value (0x00=0 dB peak … 0x8C=−100 dB floor) to an RGB color.
-    /// Colormap: strong signal → red/yellow, medium → green/cyan, weak → dark blue.
+    /// TS-Control-style blue waterfall: noise floor reads as blue, signals climb
+    /// through cyan and green to yellow/white at the strongest.
+    private static let colorStops: [(Double, (Double, Double, Double))] = [
+        (0.00, (0, 0, 30)),       // silence — near black
+        (0.35, (0, 30, 180)),     // noise floor — blue
+        (0.55, (0, 180, 255)),    // weak signal — cyan
+        (0.72, (40, 220, 80)),    // medium — green
+        (0.88, (255, 255, 0)),    // strong — yellow
+        (1.00, (255, 255, 220)),  // strongest — near white
+    ]
+
     private func color(for val: UInt8) -> (UInt8, UInt8, UInt8) {
         // norm: 1.0 = strongest signal, 0.0 = no signal
-        let norm = 1.0 - Double(val) / Double(0x8C)
-        switch norm {
-        case 0.80...:
-            // Red → yellow
-            let t = (norm - 0.80) / 0.20
-            return (255, UInt8(clamping: Int(255 * t)), 0)
-        case 0.55..<0.80:
-            // Yellow → green
-            let t = (norm - 0.55) / 0.25
-            return (UInt8(clamping: Int(255 * (1 - t))), 200, 0)
-        case 0.35..<0.55:
-            // Green → cyan
-            let t = (norm - 0.35) / 0.20
-            return (0, UInt8(clamping: Int(150 + 105 * t)), UInt8(clamping: Int(200 * t)))
-        case 0.15..<0.35:
-            // Cyan → blue
-            let t = (norm - 0.15) / 0.20
-            return (0, UInt8(clamping: Int(100 * (1 - t))), UInt8(clamping: Int(100 + 155 * t)))
-        default:
-            // Dark blue → black
-            let t = norm / 0.15
-            return (0, 0, UInt8(clamping: Int(60 * t)))
+        let norm = Swift.max(0, Swift.min(1, 1.0 - Double(val) / Double(0x8C)))
+        let stops = Self.colorStops
+        for i in 1..<stops.count where norm <= stops[i].0 {
+            let (f0, c0) = stops[i - 1]
+            let (f1, c1) = stops[i]
+            let t = f1 > f0 ? (norm - f0) / (f1 - f0) : 0
+            return (UInt8(clamping: Int(c0.0 + (c1.0 - c0.0) * t)),
+                    UInt8(clamping: Int(c0.1 + (c1.1 - c0.1) * t)),
+                    UInt8(clamping: Int(c0.2 + (c1.2 - c0.2) * t)))
         }
+        return (255, 255, 220)
     }
 }

@@ -2,20 +2,20 @@
 //  FrontPanelView.swift
 //  Kenwood control
 //
-//  TS-Control-style compact front panel.
-//  Layout (top → bottom):
-//    1. DSP toolbar  — NB/NR/BC/ATT/PRE/AGC toggles + inline meter bars + Connect
-//    2. Mode row     — Band ops, mode picker, data mode, VOX, speech proc
-//    3. VFO row      — Large VFO A (left) and VFO B (right)
-//    4. Controls row — RF/AF/SQL/Mic gains, filter Lo/Hi, RIT/XIT
-//    5. TX row       — PTT, power, monitor, ATU
-//    6. Meters row   — expandable 4-gauge analog meters
-//    7. Scope        — spectrum + waterfall (fills remaining space)
+//  TS-Control-style front panel.
+//  Layout: a three-zone control strip on top, scope filling the rest.
+//    ┌─────────┬──────────────────────┬──────────────────────────┐
+//    │ TXBlock │ FunctionColumn       │ VFOBlock                 │
+//    │ PTT/ATU │  DSP toggles         │  clock + Connect         │
+//    │ Power…  │  aux buttons         │  big white VFO digits    │
+//    │ Mic/Mon │  gains + RIT/XIT     │  band/mode/split buttons │
+//    └─────────┴──────────────────────┴──────────────────────────┘
+//    Meters strip (collapsible) — then spectrum + waterfall.
 //
-//  Performance note: each numbered row is its own @Observable-tracked struct so
+//  Performance note: each zone row is its own @Observable-tracked struct so
 //  that SwiftUI only re-renders the row(s) whose RadioState properties actually
-//  changed. e.g. a VFO frequency tick does not re-layout the DSP toolbar or
-//  controls row.
+//  changed. e.g. a VFO frequency tick does not re-layout the DSP toggles or
+//  gains row.
 
 import SwiftUI
 import Combine
@@ -73,6 +73,23 @@ private func fpCurrentBandLabel(hz: Int) -> String? {
     fpBandRanges.first { $0.1.contains(hz) }?.0
 }
 
+/// TS-Control-style grouped frequency display: 14_074_000 Hz → "14.074.000"
+private func fpFormatHzGrouped(_ hz: Int) -> String {
+    String(format: "%d.%03d.%03d", hz / 1_000_000, (hz / 1_000) % 1_000, hz % 1_000)
+}
+
+/// Parse a typed frequency. Two or more dots → grouped Hz ("14.074.000");
+/// otherwise a plain MHz decimal ("14.074").
+private func fpParseFrequencyHz(_ s: String) -> Int? {
+    let trimmed = s.trimmingCharacters(in: .whitespaces)
+    let dotCount = trimmed.filter { $0 == "." }.count
+    if dotCount >= 2 {
+        return Int(trimmed.filter(\.isNumber))
+    }
+    guard let mhz = Double(trimmed) else { return nil }
+    return Int(mhz * 1_000_000)
+}
+
 // MARK: - FrontPanelView
 //
 // Body is intentionally lean — it accesses no RadioState properties directly.
@@ -87,52 +104,16 @@ struct FrontPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            DSPToolbarRow(radio: radio)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-
             if radio.isMemoryMode == true {
-                Divider()
                 MemoryModeBanner(radio: radio)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
+                Divider()
             }
 
-            Divider()
-
-            ModeRow(radio: radio)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-
-            Divider()
-
-            VFORow(radio: radio)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-
-            Divider()
-
-            TuningStepRow(radio: radio)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-
-            Divider()
-
-            ControlsRow(radio: radio)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-
-            Divider()
-
-            TXRow(radio: radio)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-
-            Divider()
-
-            ClockSyncRow(radio: radio)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
+            TopControlStrip(radio: radio)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
 
             Divider()
 
@@ -152,6 +133,44 @@ struct FrontPanelView: View {
             // scopeStore.points subscriptions away from FrontPanelView.body.
             ScopePanel(radio: radio, engine: waterfallEngine)
                 .frame(maxHeight: .infinity)
+        }
+        .background(KenwoodTheme.chassis)
+        .preferredColorScheme(.dark)
+        .frame(minWidth: 1220, minHeight: 640)
+    }
+}
+
+// MARK: - Top control strip (TS-Control three-zone layout)
+//
+// Reads no RadioState properties itself — each zone is its own
+// @Observable-tracked struct so the row-isolation pattern is preserved.
+
+private struct TopControlStrip: View {
+    let radio: RadioState
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            TXBlock(radio: radio)
+            Divider()
+            FunctionColumn(radio: radio)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Divider()
+            VFOBlock(radio: radio)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+// MARK: - Center function column (DSP toggles / aux buttons / gains)
+
+private struct FunctionColumn: View {
+    let radio: RadioState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            DSPToolbarRow(radio: radio)
+            AuxRow(radio: radio)
+            ControlsRow(radio: radio)
         }
     }
 }
@@ -185,18 +204,22 @@ private struct MemoryModeBanner: View {
     }
 }
 
-// MARK: - Row 1: DSP toolbar
+// MARK: - Function row 1: DSP toggles
 //
 // Subscribes to: noiseBlankerEnabled, transceiverNRMode, beatCancelMode,
 //   attenuatorLevel, preampLevel, agcMode, isNoiseReductionEnabled.
-// ConnectButton is a separate struct so connectionStatus changes only
-// re-render that button, not the DSP toggles.
 
 private struct DSPToolbarRow: View {
     let radio: RadioState
 
     var body: some View {
         HStack(spacing: 4) {
+            dspCycle("PRE", label: radio.preampLevel?.label ?? "Off") {
+                radio.cyclePreampLevel()
+            }
+            dspCycle("ATT", label: radio.attenuatorLevel?.label ?? "Off") {
+                radio.cycleAttenuatorLevel()
+            }
             dspToggle("NB", value: radio.noiseBlankerEnabled ?? false) {
                 radio.setNoiseBlankerEnabled(!($0))
             }
@@ -204,27 +227,11 @@ private struct DSPToolbarRow: View {
             dspCycle("BC", label: radio.beatCancelMode?.label ?? "Off") {
                 radio.cycleBeatCancelMode()
             }
-            dspCycle("ATT", label: radio.attenuatorLevel?.label ?? "Off") {
-                radio.cycleAttenuatorLevel()
-            }
-            dspCycle("PRE", label: radio.preampLevel?.label ?? "Off") {
-                radio.cyclePreampLevel()
-            }
             dspCycle("AGC", label: radio.agcMode?.label ?? "SLOW") {
                 radio.cycleAGCMode()
             }
             FilterSlotButton(radio: radio)
             APFButton(radio: radio)
-
-            Spacer()
-
-            // Isolated subview — MeterStore ticks only re-render DSPMeterBars
-            DSPMeterBars()
-
-            Divider().frame(height: 18)
-
-            // Isolated subview — connectionStatus changes only re-render ConnectButton
-            ConnectButton(radio: radio)
         }
         .controlSize(.small)
     }
@@ -664,10 +671,10 @@ private struct ConnectButton: View {
                 .foregroundColor(isConnected ? .green : (isConnecting ? .yellow : .secondary))
             if isConnected {
                 Button("Disconnect") { radio.disconnect() }
-                    .buttonStyle(CompactButtonStyle(tint: .red))
+                    .buttonStyle(CompactButtonStyle(isActive: true, tint: KenwoodTheme.txRed))
             } else if !isConnecting {
                 Button("Connect") { radio.reconnect() }
-                    .buttonStyle(CompactButtonStyle(tint: .green))
+                    .buttonStyle(CompactButtonStyle(isActive: true, tint: KenwoodTheme.activeGreen))
             }
         }
         .accessibilityElement(children: .combine)
@@ -684,49 +691,17 @@ private struct ConnectButton: View {
     }
 }
 
-// MARK: - Row 2: Mode row
-// Subscribes to: txVFO, operatingMode, dataModeEnabled, voxEnabled, speechProcEnabled.
+// MARK: - Function row 2: aux buttons
+// Subscribes to: dataModeEnabled, scanActive.
 
-private struct ModeRow: View {
+private struct AuxRow: View {
     let radio: RadioState
-    @State private var lastAnnouncedMode: String = ""
+    @State private var showAudioSettings = false
+    @State private var showLogbook       = false
+    @State private var showCallsignLookup = false
 
     var body: some View {
         HStack(spacing: 4) {
-            Button("A=B") { radio.send("VV;") }
-                .buttonStyle(CompactButtonStyle())
-                .accessibilityLabel("Copy VFO A to B")
-            Button("A↔B") { radio.send("EX;") }
-                .buttonStyle(CompactButtonStyle())
-                .accessibilityLabel("Swap VFO A and B")
-            Button("Split") {
-                if radio.txVFO == .b { radio.send(KenwoodCAT.setTransmitterVFO(.a)) }
-                else                 { radio.send(KenwoodCAT.setTransmitterVFO(.b)) }
-            }
-            .buttonStyle(CompactButtonStyle(isActive: radio.txVFO == .b))
-            .accessibilityLabel("Split: transmit on VFO B")
-            .accessibilityValue(radio.txVFO == .b ? "On" : "Off")
-
-            Divider().frame(height: 18)
-
-            Picker("", selection: Binding(
-                get: { radio.operatingMode ?? .usb },
-                set: { radio.send(KenwoodCAT.setOperatingMode($0)) }
-            )) {
-                Text("LSB").tag(KenwoodCAT.OperatingMode.lsb)
-                Text("USB").tag(KenwoodCAT.OperatingMode.usb)
-                Text("CW").tag(KenwoodCAT.OperatingMode.cw)
-                Text("CW-R").tag(KenwoodCAT.OperatingMode.cwR)
-                Text("AM").tag(KenwoodCAT.OperatingMode.am)
-                Text("FM").tag(KenwoodCAT.OperatingMode.fm)
-                Text("FSK").tag(KenwoodCAT.OperatingMode.fsk)
-            }
-            .pickerStyle(.segmented)
-            .accessibilityLabel("Operating mode")
-            .frame(maxWidth: 340)
-
-            Divider().frame(height: 18)
-
             Button(radio.dataModeEnabled == true ? "DATA: ON" : "DATA: OFF") {
                 let next = !(radio.dataModeEnabled ?? false)
                 radio.send(next ? "DA1;" : "DA0;")
@@ -736,39 +711,154 @@ private struct ModeRow: View {
             .accessibilityLabel("Data mode")
             .accessibilityValue(radio.dataModeEnabled == true ? "On" : "Off")
 
-            Divider().frame(height: 18)
-
-            Button("VOX") { radio.setVOXEnabled(!(radio.voxEnabled ?? false)) }
-                .buttonStyle(CompactButtonStyle(isActive: radio.voxEnabled == true))
-                .accessibilityLabel("VOX")
-                .accessibilityValue(radio.voxEnabled == true ? "On" : "Off")
-
-            Button("SP") { radio.setSpeechProcEnabled(!(radio.speechProcEnabled ?? false)) }
-                .buttonStyle(CompactButtonStyle(isActive: radio.speechProcEnabled == true))
-                .accessibilityLabel("Speech processor")
-                .accessibilityValue(radio.speechProcEnabled == true ? "On" : "Off")
-
             ScanButton(radio: radio)
 
-            Spacer()
+            Divider().frame(height: 18)
+
+            Button("QM Store")  { radio.send("QM1;") }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Store quick memory")
+            Button("QM Recall") { radio.send("QM0;") }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Recall quick memory")
+            MemoriesButton(radio: radio)
+
+            Divider().frame(height: 18)
+
+            Button("Audio…") { showAudioSettings = true }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Operator Audio Settings")
+                .accessibilityHint("Opens the audio routing panel to select TX and RX audio devices")
+
+            Button("Lookup…") { showCallsignLookup = true }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Callsign Lookup")
+                .accessibilityHint("Look up a callsign on QRZ, HamQTH, or FCC ULS")
+
+            Button("Log QSO…") { showLogbook = true }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Open Logbook")
+                .accessibilityHint("Log a contact and view your QSO log")
+
+            ClockSyncRow(radio: radio)
         }
         .controlSize(.small)
-        .onChange(of: radio.operatingMode) { _, mode in
-            if let mode {
-                let label = mode.label
-                guard label != lastAnnouncedMode else { return }
-                lastAnnouncedMode = label
-                fpAnnounce("Mode: \(label)")
+        .sheet(isPresented: $showAudioSettings) {
+            DismissableSheet(title: "Operator Audio Settings",
+                             isPresented: $showAudioSettings) {
+                AudioSectionView(radio: radio)
             }
+            .frame(minWidth: 560, minHeight: 520)
+        }
+        .sheet(isPresented: $showCallsignLookup) {
+            NavigationStack {
+                CallsignLookupView()
+            }
+            .frame(minWidth: 420, minHeight: 480)
+        }
+        .sheet(isPresented: $showLogbook) {
+            NavigationStack {
+                LogbookView(
+                    radioFrequencyHz: radio.vfoAFrequencyHz ?? 0,
+                    radioMode:        radio.operatingMode?.label ?? "SSB",
+                    myCallsign:       UserDefaults.standard.string(forKey: "logbook_myCallsign") ?? ""
+                )
+            }
+            .frame(minWidth: 700, minHeight: 560)
         }
     }
 }
 
-// MARK: - Row 3: VFO row
-// Subscribes to: vfoAFrequencyHz, vfoBFrequencyHz, isTransmitting.
+// MARK: - VFO zone (right column of the strip)
+//
+// VFOBlock reads no RadioState properties itself; each sub-row owns its
+// subscriptions (digits: vfoA/B frequency; buttons: txVFO/operatingMode;
+// indicator: isTransmitting; connect: connectionStatus).
+
+private struct VFOBlock: View {
+    let radio: RadioState
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 5) {
+            HStack(spacing: 8) {
+                TXIndicator(radio: radio)
+                Spacer()
+                UTCClockText()
+                ConnectButton(radio: radio)
+            }
+
+            VFODigitsRow(radio: radio)
+
+            HStack(spacing: 4) {
+                VFOButtonsRow(radio: radio)
+                Divider().frame(height: 18)
+                TuningStepRow(radio: radio)
+            }
+
+            VFOSMeter()
+        }
+        .frame(minWidth: 430, alignment: .trailing)
+    }
+}
+
+// MARK: - TX/RX indicator (isolated isTransmitting subscription)
+
+private struct TXIndicator: View {
+    let radio: RadioState
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(radio.isTransmitting == true ? KenwoodTheme.txRed : KenwoodTheme.rxIdle)
+                .frame(width: 10, height: 10)
+                .accessibilityLabel(radio.isTransmitting == true ? "Transmitting" : "Receiving")
+                .accessibilityAddTraits([.isImage, .updatesFrequently])
+            Text(radio.isTransmitting == true ? "TX" : "RX")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(radio.isTransmitting == true ? KenwoodTheme.txRed : KenwoodTheme.labelSecondary)
+                .accessibilityHidden(true)  // label is on the Circle above
+        }
+    }
+}
+
+// MARK: - UTC clock (no radio access)
+
+private struct UTCClockText: View {
+    private static let fmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            Text("\(Self.fmt.string(from: ctx.date)) UTC")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(KenwoodTheme.labelSecondary)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Segmented S/Power meter (MeterStore subscription only)
+
+private struct VFOSMeter: View {
+    private let meters = MeterStore.shared
+
+    var body: some View {
+        HStack(spacing: 10) {
+            SegmentedMeterBar(label: "S", value: meters.readings[0] ?? 0, segments: 24)
+            SegmentedMeterBar(label: "P", value: meters.readings[5] ?? 0, segments: 12)
+        }
+    }
+}
+
+// MARK: - VFO digits row
+// Subscribes to: vfoAFrequencyHz, vfoBFrequencyHz.
 // Owns all frequency-entry state so it never bleeds into other rows.
 
-private struct VFORow: View {
+private struct VFODigitsRow: View {
     let radio: RadioState
     @State private var freqAString: String = ""
     @State private var freqBString: String = ""
@@ -777,71 +867,40 @@ private struct VFORow: View {
     @State private var vfoBDebounceTask: Task<Void, Never>? = nil
 
     var body: some View {
-        HStack(spacing: 16) {
-            // VFO A
-            VStack(alignment: .leading, spacing: 1) {
-                Text("VFO A")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
-                HStack(spacing: 4) {
-                    bandMenu(vfo: "A")
-                    Button("◀") { radio.bandStepDown() }
-                        .buttonStyle(CompactButtonStyle())
-                        .accessibilityLabel("Band down")
-                    Button("▶") { radio.bandStepUp() }
-                        .buttonStyle(CompactButtonStyle())
-                        .accessibilityLabel("Band up")
-                    TextField("", text: $freqAString)
-                        .font(.system(size: 32, weight: .light, design: .monospaced))
-                        .foregroundColor(KenwoodTheme.amber)
-                        .focused($vfoAFocused)
-                        .textFieldStyle(.plain)
-                        .frame(minWidth: 160)
-                        .accessibilityLabel("VFO A frequency — click to edit")
-                        .accessibilityValue(vfoAAccessibleValue)
-                        .onSubmit { commitFreqA() }
-                    Button("Set") { commitFreqA() }
-                        .buttonStyle(CompactButtonStyle())
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            // VFO A — main, big white digits
+            TextField("--.---.---", text: $freqAString)
+                .font(.system(size: 32, weight: .light, design: .monospaced))
+                .foregroundColor(KenwoodTheme.digitsPrimary)
+                .focused($vfoAFocused)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.trailing)
+                .frame(minWidth: 200)
+                .accessibilityLabel("VFO A frequency — click to edit")
+                .accessibilityValue(vfoAAccessibleValue)
+                .onSubmit { commitFreqA() }
+
+            // VFO B — sub, dimmed and smaller. Right-click for band jump.
+            TextField("--.---.---", text: $freqBString)
+                .font(.system(size: 18, weight: .light, design: .monospaced))
+                .foregroundColor(KenwoodTheme.digitsSecondary)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.trailing)
+                .frame(minWidth: 110)
+                .accessibilityLabel("VFO B frequency — click to edit")
+                .accessibilityValue(vfoBAccessibleValue)
+                .onSubmit { commitFreqB() }
+                .contextMenu {
+                    ForEach(fpBands, id: \.label) { band in
+                        Button("VFO B → \(band.label)") {
+                            switchBandB(label: band.label, defaultHz: band.defaultHz)
+                        }
+                    }
                 }
-            }
-
-            Divider()
-
-            // VFO B
-            VStack(alignment: .leading, spacing: 1) {
-                Text("VFO B")
-                    .font(.system(size: 9))
-                    .foregroundColor(.secondary)
-                HStack(spacing: 4) {
-                    bandMenu(vfo: "B")
-                    TextField("", text: $freqBString)
-                        .font(.system(size: 32, weight: .light, design: .monospaced))
-                        .foregroundColor(KenwoodTheme.amberDim)
-                        .textFieldStyle(.plain)
-                        .frame(minWidth: 160)
-                        .accessibilityLabel("VFO B frequency — click to edit")
-                        .accessibilityValue(vfoBAccessibleValue)
-                        .onSubmit { commitFreqB() }
-                    Button("Set") { commitFreqB() }
-                        .buttonStyle(CompactButtonStyle())
-                }
-            }
-
-            Spacer()
-
-            // RX/TX indicator
-            VStack(spacing: 2) {
-                Circle()
-                    .fill(radio.isTransmitting == true ? KenwoodTheme.txRed : KenwoodTheme.rxIdle)
-                    .frame(width: 14, height: 14)
-                    .accessibilityLabel(radio.isTransmitting == true ? "Transmitting" : "Receiving")
-                    .accessibilityAddTraits([.isImage, .updatesFrequently])
-                Text(radio.isTransmitting == true ? "TX" : "RX")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundColor(radio.isTransmitting == true ? KenwoodTheme.txRed : KenwoodTheme.labelSecondary)
-                    .accessibilityHidden(true)  // label is on the Circle above
-            }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.black))
         // Cmd+F focuses VFO A — placed here so the shortcut lives with the field
         .background(
             Button("") { vfoAFocused = true }
@@ -851,7 +910,7 @@ private struct VFORow: View {
         .onAppear { syncFreqFields() }
         .onChange(of: radio.vfoAFrequencyHz) { _, hz in
             guard let hz else { return }
-            freqAString = hzToMHz(hz)
+            freqAString = fpFormatHzGrouped(hz)
             vfoADebounceTask?.cancel()
             vfoADebounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
@@ -863,7 +922,7 @@ private struct VFORow: View {
         }
         .onChange(of: radio.vfoBFrequencyHz) { _, hz in
             guard let hz else { return }
-            freqBString = hzToMHz(hz)
+            freqBString = fpFormatHzGrouped(hz)
             vfoBDebounceTask?.cancel()
             vfoBDebounceTask = Task {
                 try? await Task.sleep(for: .milliseconds(300))
@@ -878,24 +937,20 @@ private struct VFORow: View {
     // MARK: Helpers
 
     private func syncFreqFields() {
-        if let hz = radio.vfoAFrequencyHz { freqAString = hzToMHz(hz) }
-        if let hz = radio.vfoBFrequencyHz { freqBString = hzToMHz(hz) }
+        if let hz = radio.vfoAFrequencyHz { freqAString = fpFormatHzGrouped(hz) }
+        if let hz = radio.vfoBFrequencyHz { freqBString = fpFormatHzGrouped(hz) }
     }
 
     private func commitFreqA() {
-        if let mhz = Double(freqAString) {
-            radio.send(KenwoodCAT.setVFOAFrequencyHz(Int(mhz * 1_000_000)))
+        if let hz = fpParseFrequencyHz(freqAString) {
+            radio.send(KenwoodCAT.setVFOAFrequencyHz(hz))
         }
     }
 
     private func commitFreqB() {
-        if let mhz = Double(freqBString) {
-            radio.send(KenwoodCAT.setVFOBFrequencyHz(Int(mhz * 1_000_000)))
+        if let hz = fpParseFrequencyHz(freqBString) {
+            radio.send(KenwoodCAT.setVFOBFrequencyHz(hz))
         }
-    }
-
-    private func hzToMHz(_ hz: Int) -> String {
-        String(format: "%.6f", Double(hz) / 1_000_000.0)
     }
 
     private var vfoAAccessibleValue: String {
@@ -915,33 +970,96 @@ private struct VFORow: View {
         return "\(whole) point \(String(format: "%03d", frac)) megahertz"
     }
 
-    private func switchBand(label: String, defaultHz: Int, vfo: String) {
-        fpAnnounce("VFO \(vfo): \(label)")
-        if vfo == "A" {
-            radio.jumpToBand(label)
-        } else {
-            // VFO B — BD0 only moves VFO A, so use UserDefaults memory for B.
-            let currentHz = radio.vfoBFrequencyHz
-            if let hz = currentHz, let band = fpCurrentBandLabel(hz: hz) {
-                UserDefaults.standard.set(hz, forKey: "bandFreq_B_\(band)")
-            }
-            let stored = UserDefaults.standard.integer(forKey: "bandFreq_B_\(label)")
-            let targetHz = stored > 0 ? stored : defaultHz
-            radio.send(String(format: "FB%011d;", targetHz))
+    private func switchBandB(label: String, defaultHz: Int) {
+        fpAnnounce("VFO B: \(label)")
+        // VFO B — BD0 only moves VFO A, so use UserDefaults memory for B.
+        let currentHz = radio.vfoBFrequencyHz
+        if let hz = currentHz, let band = fpCurrentBandLabel(hz: hz) {
+            UserDefaults.standard.set(hz, forKey: "bandFreq_B_\(band)")
         }
+        let stored = UserDefaults.standard.integer(forKey: "bandFreq_B_\(label)")
+        let targetHz = stored > 0 ? stored : defaultHz
+        radio.send(String(format: "FB%011d;", targetHz))
     }
+}
 
-    private func bandMenu(vfo: String) -> some View {
-        Menu("Band") {
-            ForEach(fpBands, id: \.label) { band in
-                Button(band.label) {
-                    switchBand(label: band.label, defaultHz: band.defaultHz, vfo: vfo)
+// MARK: - VFO buttons row (band / A=B / swap / split / mode)
+// Subscribes to: txVFO, operatingMode.
+
+private struct VFOButtonsRow: View {
+    let radio: RadioState
+    @State private var lastAnnouncedMode: String = ""
+
+    private static let modes: [(String, KenwoodCAT.OperatingMode)] = [
+        ("LSB", .lsb), ("USB", .usb), ("CW", .cw), ("CW-R", .cwR),
+        ("AM", .am), ("FM", .fm), ("FSK", .fsk),
+    ]
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Menu("Band") {
+                ForEach(fpBands, id: \.label) { band in
+                    Button(band.label) {
+                        fpAnnounce("VFO A: \(band.label)")
+                        radio.jumpToBand(band.label)
+                    }
                 }
             }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .font(.system(size: 11, weight: .medium))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3.5)
+            .background(RoundedRectangle(cornerRadius: 5).fill(KenwoodTheme.buttonInactive))
+            .accessibilityLabel("Band")
+            .accessibilityHint("Select a band for VFO A")
+
+            Button("◀") { radio.bandStepDown() }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Band down")
+            Button("▶") { radio.bandStepUp() }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Band up")
+
+            Button("A=B") { radio.send("VV;") }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Copy VFO A to B")
+            Button("A↔B") { radio.send("EX;") }
+                .buttonStyle(CompactButtonStyle())
+                .accessibilityLabel("Swap VFO A and B")
+            Button("Split") {
+                if radio.txVFO == .b { radio.send(KenwoodCAT.setTransmitterVFO(.a)) }
+                else                 { radio.send(KenwoodCAT.setTransmitterVFO(.b)) }
+            }
+            .buttonStyle(CompactButtonStyle(isActive: radio.txVFO == .b, tint: KenwoodTheme.blue))
+            .accessibilityLabel("Split: transmit on VFO B")
+            .accessibilityValue(radio.txVFO == .b ? "On" : "Off")
+
+            Menu {
+                ForEach(Self.modes, id: \.0) { label, mode in
+                    Button(label) { radio.send(KenwoodCAT.setOperatingMode(mode)) }
+                }
+            } label: {
+                Text(radio.operatingMode?.label ?? "USB")
+                    .foregroundColor(.white)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .font(.system(size: 11, weight: .semibold))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3.5)
+            .background(RoundedRectangle(cornerRadius: 5).fill(KenwoodTheme.blue))
+            .accessibilityLabel("Operating mode")
+            .accessibilityValue(radio.operatingMode?.label ?? "unknown")
         }
         .controlSize(.small)
-        .accessibilityRepresentation {
-            Button("Select band for VFO \(vfo)") {}
+        .onChange(of: radio.operatingMode) { _, mode in
+            if let mode {
+                let label = mode.label
+                guard label != lastAnnouncedMode else { return }
+                lastAnnouncedMode = label
+                fpAnnounce("Mode: \(label)")
+            }
         }
     }
 }
@@ -959,26 +1077,18 @@ private struct TuningStepRow: View {
     @Bindable private var prefs = TuningPreferences.shared
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text("Tune VFO A:")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .accessibilityHidden(true)
-
+        HStack(spacing: 4) {
             Picker("Tuning step", selection: $prefs.step) {
                 ForEach(MIDITuningStep.allCases) { step in
                     Text(step.label).tag(step)
                 }
             }
             .pickerStyle(.menu)
+            .labelsHidden()
             .controlSize(.small)
-            .frame(width: 110)
-            // The representation below already names the control and its value;
-            // a separate .accessibilityLabel here would be dead (representation
-            // overrides it), so it's omitted to avoid a doubled label.
-            .accessibilityRepresentation {
-                Button("Tuning step: \(prefs.step.label)") {}
-            }
+            .frame(width: 90)
+            .accessibilityLabel("Tuning step")
+            .accessibilityValue(prefs.step.label)
 
             Button {
                 tune(by: -prefs.step.rawValue)
@@ -997,8 +1107,6 @@ private struct TuningStepRow: View {
             }
             .buttonStyle(CompactButtonStyle())
             .accessibilityLabel("Tune VFO A up by \(prefs.step.label)")
-
-            Spacer()
         }
     }
 
@@ -1041,7 +1149,6 @@ private struct ControlsRow: View {
                 KnobButton(label: "RF",  value: radio.rfGain,       range: 0...255) { radio.setRFGainDebounced($0)    }
                 KnobButton(label: "AF",  value: radio.afGain,       range: 0...255) { radio.setAFGainDebounced($0)    }
                 KnobButton(label: "SQL", value: radio.squelchLevel, range: 0...255) { radio.setSquelchLevelDebounced($0) }
-                KnobButton(label: "Mic", value: radio.micGain,      range: 0...100) { radio.setMicGainDebounced($0)   }
 
                 Divider().frame(height: 18)
 
@@ -1155,88 +1262,82 @@ private struct CWKeyerRow: View {
     private func binding(_ storage: Binding<String>) -> Binding<String> { storage }
 }
 
-// MARK: - Row 5: TX row
-// Subscribes to: isTransmitting, outputPowerWatts, monitorLevel,
-//   txFilterLowCutID, txFilterHighCutID, atuTxEnabled, atuTuningActive.
+// MARK: - TX block (left column of the strip)
+// Subscribes to: isTransmitting, outputPowerWatts, monitorLevel, micGain,
+//   txFilterLowCutID, txFilterHighCutID, atuTxEnabled, atuTuningActive,
+//   antennaPort, voxEnabled, speechProcEnabled.
 
-private struct TXRow: View {
+private struct TXBlock: View {
     let radio: RadioState
-    @State private var showAudioSettings = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Button("PTT: TX") { radio.setPTT(down: true) }
-                .buttonStyle(CompactButtonStyle(isActive: radio.isTransmitting == true, tint: .red))
-                .accessibilityLabel("Push to talk, transmit")
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 4) {
+                Button("TX") { radio.setPTT(down: true) }
+                    .buttonStyle(CompactButtonStyle(isActive: radio.isTransmitting == true, tint: KenwoodTheme.txRed))
+                    .accessibilityLabel("Push to talk, transmit")
 
-            Button("PTT: RX") { radio.setPTT(down: false) }
-                .buttonStyle(CompactButtonStyle())
-                .accessibilityLabel("Push to talk, receive")
+                Button("RX") { radio.setPTT(down: false) }
+                    .buttonStyle(CompactButtonStyle())
+                    .accessibilityLabel("Push to talk, receive")
 
-            Divider().frame(height: 18)
+                Button("VOX") { radio.setVOXEnabled(!(radio.voxEnabled ?? false)) }
+                    .buttonStyle(CompactButtonStyle(isActive: radio.voxEnabled == true))
+                    .accessibilityLabel("VOX")
+                    .accessibilityValue(radio.voxEnabled == true ? "On" : "Off")
 
-            KnobButton(label: "Power", value: radio.outputPowerWatts, range: 5...100) {
-                radio.send(KenwoodCAT.setOutputPowerWatts($0))
-            }
-            KnobButton(label: "Mon", value: radio.monitorLevel, range: 0...20) {
-                radio.setMonitorLevelDebounced($0)
-            }
-            KnobButton(label: "TF Lo", value: radio.txFilterLowCutID, range: 0...5,
-                       valueLabel: { fpTF1Labels[safe: $0] ?? "\($0)" }) {
-                radio.send("TF1\($0);")
-            }
-            KnobButton(label: "TF Hi", value: radio.txFilterHighCutID, range: 0...7,
-                       valueLabel: { fpTF2Labels[safe: $0] ?? "\($0)" }) {
-                radio.send("TF2\($0);")
+                Button("SP") { radio.setSpeechProcEnabled(!(radio.speechProcEnabled ?? false)) }
+                    .buttonStyle(CompactButtonStyle(isActive: radio.speechProcEnabled == true))
+                    .accessibilityLabel("Speech processor")
+                    .accessibilityValue(radio.speechProcEnabled == true ? "On" : "Off")
             }
 
-            Divider().frame(height: 18)
+            HStack(spacing: 4) {
+                Button("ATU") {
+                    radio.send(KenwoodCAT.setAntennaTuner(txEnabled: !(radio.atuTxEnabled ?? false)))
+                }
+                .buttonStyle(CompactButtonStyle(isActive: radio.atuTxEnabled == true))
+                .accessibilityLabel("Antenna tuner")
+                .accessibilityValue(radio.atuTxEnabled == true ? "On" : "Off")
 
-            Button("ATU") {
-                radio.send(KenwoodCAT.setAntennaTuner(txEnabled: !(radio.atuTxEnabled ?? false)))
+                Button("Tune") { radio.send("AC111;") }
+                    .buttonStyle(CompactButtonStyle(isActive: radio.atuTuningActive == true, tint: KenwoodTheme.blue))
+                    .accessibilityLabel("Start ATU tuning")
+
+                Button("Stop") { radio.send("AC110;") }
+                    .buttonStyle(CompactButtonStyle())
+                    .accessibilityLabel("Stop ATU tuning")
+
+                Button("ANT: \(radio.antennaPort == 2 ? "2" : "1")") { radio.cycleAntennaPort() }
+                    .buttonStyle(CompactButtonStyle())
+                    .accessibilityLabel("Antenna port")
+                    .accessibilityValue("ANT \(radio.antennaPort == 2 ? "2" : "1")")
             }
-            .buttonStyle(CompactButtonStyle(isActive: radio.atuTxEnabled == true))
-            .accessibilityLabel("Antenna tuner")
-            .accessibilityValue(radio.atuTxEnabled == true ? "On" : "Off")
 
-            Button("Tune") { radio.send("AC111;") }
-                .buttonStyle(CompactButtonStyle(isActive: radio.atuTuningActive == true))
-                .accessibilityLabel("Start ATU tuning")
+            HStack(spacing: 4) {
+                KnobButton(label: "Power", value: radio.outputPowerWatts, range: 5...100) {
+                    radio.send(KenwoodCAT.setOutputPowerWatts($0))
+                }
+                KnobButton(label: "Mic", value: radio.micGain, range: 0...100) {
+                    radio.setMicGainDebounced($0)
+                }
+                KnobButton(label: "Mon", value: radio.monitorLevel, range: 0...20) {
+                    radio.setMonitorLevelDebounced($0)
+                }
+            }
 
-            Button("Stop") { radio.send("AC110;") }
-                .buttonStyle(CompactButtonStyle())
-                .accessibilityLabel("Stop ATU tuning")
-
-            Divider().frame(height: 18)
-
-            Button("ANT: \(radio.antennaPort == 2 ? "2" : "1")") { radio.cycleAntennaPort() }
-                .buttonStyle(CompactButtonStyle())
-                .accessibilityLabel("Antenna port")
-                .accessibilityValue("ANT \(radio.antennaPort == 2 ? "2" : "1")")
-
-            Spacer()
-
-            Button("Operator Audio Settings") { showAudioSettings = true }
-                .buttonStyle(CompactButtonStyle())
-                .accessibilityLabel("Operator Audio Settings")
-                .accessibilityHint("Opens the audio routing panel to select TX and RX audio devices")
-
-            Button("QM Store")  { radio.send("QM1;") }
-                .buttonStyle(CompactButtonStyle())
-                .accessibilityLabel("Store quick memory")
-            Button("QM Recall") { radio.send("QM0;") }
-                .buttonStyle(CompactButtonStyle())
-                .accessibilityLabel("Recall quick memory")
-            MemoriesButton(radio: radio)
+            HStack(spacing: 4) {
+                KnobButton(label: "TF Lo", value: radio.txFilterLowCutID, range: 0...5,
+                           valueLabel: { fpTF1Labels[safe: $0] ?? "\($0)" }) {
+                    radio.send("TF1\($0);")
+                }
+                KnobButton(label: "TF Hi", value: radio.txFilterHighCutID, range: 0...7,
+                           valueLabel: { fpTF2Labels[safe: $0] ?? "\($0)" }) {
+                    radio.send("TF2\($0);")
+                }
+            }
         }
         .controlSize(.small)
-        .sheet(isPresented: $showAudioSettings) {
-            DismissableSheet(title: "Operator Audio Settings",
-                             isPresented: $showAudioSettings) {
-                AudioSectionView(radio: radio)
-            }
-            .frame(minWidth: 560, minHeight: 520)
-        }
     }
 }
 
@@ -1435,8 +1536,6 @@ private struct ClockSyncRow: View {
                     .foregroundStyle(statusMessage.hasPrefix("✓") ? .green : .red)
                     .accessibilityLabel(statusMessage)
             }
-
-            Spacer()
         }
         .controlSize(.small)
     }
@@ -1665,24 +1764,20 @@ private struct KnobButton: View {
 
 struct CompactButtonStyle: ButtonStyle {
     var isActive: Bool = false
-    var tint: Color = KenwoodTheme.amberGlow
+    var tint: Color = KenwoodTheme.activeGreen
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 11, weight: isActive ? .semibold : .regular))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .font(.system(size: 11, weight: .medium))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3.5)
             .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(isActive
-                          ? tint.opacity(0.25)
-                          : KenwoodTheme.buttonInactive.opacity(0.8))
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(isActive ? tint : KenwoodTheme.buttonInactive)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(isActive ? tint.opacity(0.6) : KenwoodTheme.border, lineWidth: 0.5)
-            )
-            .foregroundColor(isActive ? tint : .primary)
+            .foregroundColor(isActive ? .white : Color(white: 0.92))
             .opacity(configuration.isPressed ? 0.7 : 1.0)
     }
 }
@@ -1845,17 +1940,41 @@ private struct InlineMeterBar: View {
     }
 }
 
-/// Two-bar group used in the DSP toolbar row.
-private struct DSPMeterBars: View {
-    private let meters = MeterStore.shared
+/// TS-Control-style segmented LED bar meter (green → yellow → red).
+struct SegmentedMeterBar: View {
+    let label: String
+    let value: Double   // normalized 0…1
+    var segments: Int = 20
 
     var body: some View {
         HStack(spacing: 4) {
-            InlineMeterBar(label: "S", value: meters.readings[0] ?? 0, color: KenwoodTheme.barS)
-                .frame(width: 70)
-            InlineMeterBar(label: "P", value: meters.readings[5] ?? 0, color: KenwoodTheme.barPower)
-                .frame(width: 50)
+            Text(label)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(.secondary)
+                .frame(minWidth: 10, alignment: .trailing)
+            HStack(spacing: 1.5) {
+                ForEach(0..<segments, id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(segmentColor(i).opacity(isLit(i) ? 1.0 : 0.18))
+                        .frame(width: 7, height: 11)
+                }
+            }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(String(format: "%.0f%%", value * 100))
+        .accessibilityAddTraits([.isImage, .updatesFrequently])
+    }
+
+    private func isLit(_ i: Int) -> Bool {
+        Double(i) / Double(segments) < Swift.max(0, Swift.min(1, value))
+    }
+
+    private func segmentColor(_ i: Int) -> Color {
+        let f = Double(i) / Double(segments)
+        if f < 0.6 { return KenwoodTheme.meterGreen }
+        if f < 0.8 { return KenwoodTheme.meterAmber }
+        return KenwoodTheme.meterRed
     }
 }
 

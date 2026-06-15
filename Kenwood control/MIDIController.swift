@@ -31,6 +31,11 @@ enum MIDITuningStep: Int, CaseIterable, Identifiable, Codable {
 
     var id: Int { rawValue }
 
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(Int.self)
+        self = MIDITuningStep(rawValue: raw) ?? .khz1
+    }
+
     var label: String {
         switch self {
         case .hz1:    return "1 Hz"

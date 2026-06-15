@@ -1084,9 +1084,6 @@ struct AudioSectionView: View {
                 }
                 .frame(minWidth: 360)
                 .accessibilityLabel("Microphone input device")
-                .accessibilityRepresentation {
-                    Button("Microphone: \(radio.selectedLanMicInputUID.isEmpty ? "system default" : "custom")") {}
-                }
 
                 Text(radio.selectedLanMicInputUID.isEmpty ? "(default)" : "custom")
                     .font(.system(.body, design: .monospaced))
@@ -1184,9 +1181,6 @@ struct AudioSectionView: View {
                 }
                 .frame(minWidth: 360)
                 .accessibilityLabel("Mac speaker output device")
-                .accessibilityRepresentation {
-                    Button("Speaker output: \(radio.selectedLanAudioOutputUID.isEmpty ? "system default" : "custom")") {}
-                }
                 .onChange(of: radio.selectedLanAudioOutputUID) { _, newUID in
                     AppFileLogger.shared.log("UI: LAN output selection uid=\(newUID.isEmpty ? "(default)" : newUID)")
                     radio.applyLanAudioOutputSelection()
@@ -1251,9 +1245,6 @@ struct AudioSectionView: View {
                 }
                 .frame(minWidth: 240)
                 .accessibilityLabel("Noise reduction profile")
-                .accessibilityRepresentation {
-                    Button("NR profile: \(radio.noiseReductionProfileRaw)") {}
-                }
 
                 HStack(spacing: 12) {
                     Text("NR Strength")

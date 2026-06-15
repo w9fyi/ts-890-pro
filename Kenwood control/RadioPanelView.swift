@@ -1524,7 +1524,7 @@ struct AnalogMeterView: View {
             Text(type == .none_ ? "---" : type.formatValue(rawValue))
                 .font(.system(.caption, design: .monospaced))
                 .fontWeight(.semibold)
-                .foregroundStyle(KenwoodTheme.amber)
+                .foregroundStyle(KenwoodTheme.digitsPrimary)
         }
         .padding(8)
         .background(KenwoodTheme.panel)

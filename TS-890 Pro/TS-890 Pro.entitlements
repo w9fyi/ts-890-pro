@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- ENABLE_APP_SANDBOX=YES in build settings injects app-sandbox=true at
+         signing time regardless of this key — keep it true so the file matches
+         what actually ships. -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <!-- Serial port access for USB CAT control. The temporary exceptions below
+         only allow open/read/write on /dev nodes; the sandbox still denies the
+         tty configuration ioctls (tcsetattr/IOSSIOSPEED fail with EPERM, leaving
+         the port at the 9600-baud driver default). device.serial authorizes the
+         full serial device class. -->
+    <key>com.apple.security.device.serial</key>
+    <true/>
+    <!-- Allow hosting third-party Audio Unit components (e.g. rnnoise.component). -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+    <!-- Allow USB serial port access via IOKit (CP210x, FTDI, etc. for radio USB CAT). -->
+    <key>com.apple.security.temporary-exception.iokit-user-client-class</key>
+    <array>
+        <string>IOSerialBSDClient</string>
+    </array>
+    <!-- Allow open() on /dev/cu.* device nodes (required alongside IOKit entitlement). -->
+    <key>com.apple.security.temporary-exception.files.absolute-path.read-write</key>
+    <array>
+        <string>/dev/</string>
+    </array>
+    <!-- Debug-only convenience: allow reading user-installed Audio Unit components. -->
+    <key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+    <array>
+        <string>Library/Audio/Plug-Ins/Components/</string>
+    </array>
+</dict>
+</plist>

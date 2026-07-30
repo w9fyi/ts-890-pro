@@ -68,10 +68,10 @@ cd ts-890-pro
 2. Open the project in Xcode:
 
 ```
-open "Kenwood control.xcodeproj"
+open "TS-890 Pro.xcodeproj"
 ```
 
-3. In Xcode, select the **Kenwood control** scheme and your Mac as the destination.
+3. In Xcode, select the **TS-890 Pro** scheme and your Mac as the destination.
 4. Press **Command-B** to build, or **Command-R** to build and run.
 
 The app will be signed with your local development certificate, so Gatekeeper will not block it.

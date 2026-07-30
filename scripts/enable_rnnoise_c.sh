@@ -11,7 +11,7 @@ set -euo pipefail
 # After enabling, rebuild the app.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PBX="$ROOT_DIR/Kenwood control.xcodeproj/project.pbxproj"
+PBX="$ROOT_DIR/TS-890 Pro.xcodeproj/project.pbxproj"
 HDR="$ROOT_DIR/ThirdParty/rnnoise/src/rnnoise.h"
 
 mode="${1:-}"
